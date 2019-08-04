@@ -1,9 +1,9 @@
 import struct
 
-from bleson.core.hci.constants import *
-from bleson.core.hci.types import HCIPacket, HCIPayload
-from bleson.core.types import Advertisement, BDAddress, UUID16, UUID128
-from bleson.logger import log
+from ...core.hci.constants import *
+from ...core.hci.types import HCIPacket, HCIPayload
+from ...core.types import Advertisement, BDAddress, UUID16, UUID128
+from ...logger import log
 
 
 
@@ -82,6 +82,8 @@ class AdvertisingDataConverters(object):
         if advertisement.beacon_payload:
             hci_payload.add_item(MESH_BEACON, advertisement.beacon_payload)
 
+        if advertisement.pb_adv_pdu:
+            hci_payload.add_item(PB_ADV, advertisement.pb_adv_pdu)
         # TODO: more!!
 
         return hci_payload.data
@@ -198,7 +200,7 @@ class AdvertisingDataConverters(object):
             elif GAP_TX_POWER == gap_type:
                 advertisement.tx_pwr_lvl = payload
                 log.debug("TX Power={}".format(advertisement.tx_pwr_lvl))
-            elif PB_ABV == gap_type:
+            elif PB_ADV == gap_type:
                 advertisement.pb_adv_pdu = payload
             elif MESH_MSG == gap_type:
                 advertisement.network_pdu = payload

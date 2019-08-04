@@ -1,14 +1,16 @@
 import array
+import traceback
+
 import fcntl
 import socket
 import struct
 import threading
 
-from bleson.core.hci.constants import *
-from bleson.core.hci.type_converters import AdvertisingDataConverters, parse_hci_event_packet, hex_string
-from bleson.core.types import Device, BDAddress
-from bleson.interfaces.adapter import Adapter
-from bleson.logger import log
+from ...core.hci.constants import *
+from ...core.hci.type_converters import AdvertisingDataConverters, parse_hci_event_packet, hex_string
+from ...core.types import Device, BDAddress
+from ...interfaces.adapter import Adapter
+from ...logger import log
 from .constants import *
 
 
@@ -19,7 +21,7 @@ class BluetoothHCIAdapter(Adapter):
         self._keep_running = True
         self._socket = None
         self._socket_poll_thread = None
-
+        self.adv_type = 0x00
         # User callbacks
         self.on_advertising_data = None
 
@@ -161,7 +163,7 @@ class BluetoothHCIAdapter(Adapter):
                           15,           # cmd parameters length
                           0x00a0,       # min interval
                           0x00a0,       # max interval
-                          0,            # adv type
+                          self.adv_type,            # adv type
                           0,            # direct addr type
                           0,            # direct addr type
                           0,0,0,0,0,0,  # direct addr

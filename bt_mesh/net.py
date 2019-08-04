@@ -1,5 +1,5 @@
-from mesh import *
-import transport, crypto
+from .mesh import *
+from . import transport, crypto
 import struct
 
 def xor_bytes(b1: bytes, b2: bytes) -> bytes:

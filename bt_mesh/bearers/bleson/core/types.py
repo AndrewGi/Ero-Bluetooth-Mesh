@@ -1,4 +1,4 @@
-from bleson.logger import log
+from ..logger import log
 from uuid import UUID
 
 # Collection of value objects.
@@ -359,7 +359,7 @@ class Advertisement(ValueObject):
           Advertisement(flags=0x06, name='bleson', txpower=0, uuid16s=[], uuid128s=[], rssi=-99, mfg_data=None)
 
        """
-    def __init__(self, name=None, address=None, rssi=None, tx_power=None, raw_data=None, network_pdu = None):
+    def __init__(self, name=None, address=None, rssi=None, tx_power=None, raw_data=None, network_pdu = None, pb_adv_pdu = None):
         #TODO: use kwargs
         self.flags      =   6   # uint8         # default to LE_GENERAL_DISCOVERABLE | BREDR_NOT_SUPPORTED
         self.type = None
@@ -384,7 +384,7 @@ class Advertisement(ValueObject):
         self.rssi = rssi            # really only part of an Advertisement Report...
         self.beacon_payload = network_pdu # type: bytes
         self.network_pdu = None # type: bytes
-        self.pb_adv_pdu = None # type: bytes
+        self.pb_adv_pdu = pb_adv_pdu # type: bytes
 
         self.raw_data = raw_data
         log.debug(self)

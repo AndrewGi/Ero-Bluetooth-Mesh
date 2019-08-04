@@ -2,7 +2,7 @@ from typing import *
 from enum import IntEnum
 from uuid import UUID
 
-from applications.bluetooth_mesh.bt_mesh import crypto
+from . import crypto
 
 KeyIndex = NewType("NetIndex", int)
 NetKeyIndex = NewType("NetKeyIndex", KeyIndex)

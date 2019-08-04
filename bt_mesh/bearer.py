@@ -1,5 +1,8 @@
 import enum
+from abc import ABC
 from typing import Optional
+
+from . import beacon
 
 class BearerType(enum.IntEnum):
 	Advertisement = 1
@@ -8,24 +11,21 @@ class BearerType(enum.IntEnum):
 	Other = 4
 
 
-
 class Bearer:
 	@classmethod
-	def __init__(self, network = None):
+	def __init__(self, network=None):
 		self.network = network
 
+	@classmethod
 	def bearer_type(cls):
 		raise NotImplementedError()
 
-	def send(self, network_pdu: bytes):
+	def send_network_pdu(self, network_pdu: bytes):
 		raise NotImplementedError()
 
 	def recv_network_pdu(self, network_pdu: bytes):
 		raise NotImplementedError("this is my job")
 
-	def recv_beacon(self, mesh_beacon_payload: bytes):
-		raise NotImplementedError("this is my job")
-
-	def recv_pb_adv(self, pb_adv: bytes):
-		raise NotImplementedError
+	def recv_beacon(self, mesh_beacon_payload: beacon.UnprovisionedBeacon):
+		self.network.handle_beacon(mesh_beacon_payload)
 

@@ -1,6 +1,6 @@
-from bleson.interfaces.provider import Provider
+from ...interfaces.provider import Provider
 from .linux_adapter import BluetoothHCIAdapter
-from bleson.logger import log
+from ...logger import log
 
 
 class LinuxProvider(Provider):

@@ -1,6 +1,6 @@
 
-from bleson.interfaces.adapter import Adapter
-from bleson.interfaces.role import Role
+from ..interfaces.adapter import Adapter
+from ..interfaces.role import Role
 
 
 class Observer(Role):

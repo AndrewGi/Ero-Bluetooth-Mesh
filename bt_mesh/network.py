@@ -1,6 +1,6 @@
 import datetime
 
-from bt_mesh import net, beacon, prov
+from . import beacon, prov
 import queue
 import threading
 from typing import *
@@ -10,7 +10,7 @@ class Network:
 		self.handle_net_pdu_thread = threading.Thread(target=self._handle_net_pdus)
 		self.handle_net_pdu_thread.start()
 		self.incoming_beacons = queue.Queue()
-		self.handle_beacon_thread = threading.Thread(target=self.handle_beacon_thread)
+		self.handle_beacon_thread = threading.Thread(target=self._handle_beacons)
 		self.bearers = list() # type: List[bearer.Bearer]
 		self.unprovisioned_devices = list() # type: List[beacon.UnprovisionedBeacon]
 		self.provisioner = prov.Provisioner(None)
@@ -38,12 +38,17 @@ class Network:
 
 	def _send_raw_network_pdu(self, raw_network_pdu: bytes):
 		for b in self.bearers:
-			b.send(raw_network_pdu)
+			b.send_network_pdu(raw_network_pdu)
 
 	def add_bearer(self, bearer):
-		if not self.provisioner.default_bearer:
-			self.provisioner.default_bearer = bearer
+		bearer.network = self
+		if not self.provisioner.pb_bearer:
+			self.provisioner.set_bearer(bearer)
 		self.bearers.append(bearer)
+
+	def handle_beacon(self, in_beacon: beacon.UnprovisionedBeacon):
+		if self.provisioner:
+			self.provisioner.handle_beacon(in_beacon)
 
 
 

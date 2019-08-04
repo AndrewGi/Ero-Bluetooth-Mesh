@@ -1,7 +1,7 @@
 import struct
 from collections import namedtuple
 
-from bleson import log
+from ... import log
 
 HCIPacket = namedtuple('HCIPacket', 'event_name event_code subevent_code data length')
 
@@ -18,7 +18,7 @@ class HCIPayload:
         :param value:  array of byte-like data or homogeneous array of 'ValueObjects'
         :return:       self
         """
-        from bleson import ValueObject
+        from ..types import ValueObject
         log.debug("tag={} len={} data={} data={}".format(tag, len(value), type(value), value))
 
         if all(isinstance(item, ValueObject) for item in value):
