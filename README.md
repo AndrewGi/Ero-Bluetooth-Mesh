@@ -1,7 +1,4 @@
 # Ero-Bluetooth-Mesh
-Bluetooth mesh stack for use in ero system. May be useful for others for reference
-pure-python except for any hardware bearer layers 
-
 Built in bearer is using a slightly modifier [Bleson](https://github.com/TheCellule/python-bleson) library for the advertising bearer layer. So far only tested on Linux. OSX untested and Windows 10 doesn't seem like it sets the advertising data correctly.
 
 See better_mesh_ctl.py for an example.
