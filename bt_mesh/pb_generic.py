@@ -67,7 +67,7 @@ GPCF_classes = dict() # type: Dict[GPCF, Any]
 class GenericProvisioningPDU:
 	MAX_LEN = 24
 	def __init__(self):
-		self.transaction_number = None # type: int
+		self.transaction_number = None
 
 	def payload(self) -> bytes:
 		return bytes()

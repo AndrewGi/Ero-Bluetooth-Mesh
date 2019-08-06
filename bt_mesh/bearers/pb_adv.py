@@ -2,6 +2,7 @@ import queue
 import random
 import struct
 import threading
+import time
 from abc import ABC
 from uuid import UUID
 from typing import *
@@ -86,6 +87,7 @@ class Link(prov.ProvisionerBearer):
 		self.process_incoming_adv_pdus_thread.start()
 		self.link_ack_cv = threading.Condition()
 		self.link_acked = False
+		self.message_did_ack = False
 
 	def increment_transaction_number(self):
 		self.transaction_number = pb_generic.TransactionNumber(self.transaction_number + 1)
@@ -102,13 +104,21 @@ class Link(prov.ProvisionerBearer):
 		return out
 
 	def send_generic_prov_pdus(self, pdus: [pb_generic.GenericProvisioningPDU], retries: int = 3):
-		self.send_with_retries([self.new_pdu(pdu, transaction_number=pdu.transaction_number) for pdu in pdus], retries)
+		out_pdus = [self.new_pdu(pdu, transaction_number=pdu.transaction_number) for pdu in pdus]
+		link_ack = False
+		trans_ack = False
+		if out_pdus[0].generic_prov_pdu.gpcf() == pb_generic.GPCF.PROVISIONING_BEARER_CONTROL:
+			link_ack = True
+		if out_pdus[0].generic_prov_pdu.gpcf() == pb_generic.GPCF.TRANSACTION_START:
+			trans_ack = True
+		self.send_with_retries(out_pdus, retries, link_ack=link_ack, transaction_ack=trans_ack)
 
 	def send_adv(self, pdu: AdvPDU, repeat: Optional[bool] = False):
 		self.link_bearer.send_pb_adv(pdu.to_bytes(), repeat)
 
-	def send_with_retries(self, pdus: List[AdvPDU], retries: int = None, link_ack: bool = False):
+	def send_with_retries(self, pdus: List[AdvPDU], retries: int = None, link_ack: bool = False, transaction_ack: bool = False):
 		self.link_acked = False
+		self.message_did_ack = False
 		if not retries:
 			retries = self.RETRANSMISSION_TRIES
 		for i in range(retries):
@@ -120,9 +130,13 @@ class Link(prov.ProvisionerBearer):
 				with self.link_ack_cv:
 					if self.link_ack_cv.wait(self.RETRANSMISSION_DELAY):
 						return True
-			elif self.wait_for_ack(self.RETRANSMISSION_DELAY):
+			elif not transaction_ack:
+				time.sleep(self.RETRANSMISSION_DELAY)
+			elif (self.message_did_ack or self.wait_for_ack(self.RETRANSMISSION_DELAY)):
 				return True
 		self.is_open = False
+		if (not transaction_ack) and (not link_ack):
+			return
 		raise TimeoutError("no ack")
 
 	def open(self):
@@ -132,6 +146,7 @@ class Link(prov.ProvisionerBearer):
 		self.is_open = self.send_with_retries([pdu], link_ack=True)
 
 	def handle_link_ack(self, traction_number: prov.TransactionNumber, ack: pb_generic.TransactionAckPDU):
+		print(self.link_acked)
 		if self.link_acked:
 			return
 		if not self.is_open and traction_number == 0:

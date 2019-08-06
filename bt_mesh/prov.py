@@ -133,7 +133,7 @@ class AuthenticationMethod(enum.IntEnum):
 	InputOOB = 3
 
 
-AuthenticationMethod = Union[OutputOOBAction, InputOOBAction]
+AuthenticationAction = Union[OutputOOBAction, InputOOBAction]
 
 
 class Start(PDU):
@@ -158,20 +158,21 @@ class Start(PDU):
 		return cls(*cls.STRUCT.unpack(b))
 
 
-class PublicKey(PDU):
-	__slots__ = "x", "y"
+class PublicKeyPDU(PDU):
+	__slots__ = "public_key"
 
-	def __init__(self, x: crypto.PublicKeyXY, y: crypto.PublicKeyXY):
+	def __init__(self, public_key: crypto.PublicKeyPoint):
 		super().__init__(PDUType.PublicKey)
-		self.x = x
-		self.y = y
+		if public_key.curve != 'p256':
+			raise ValueError("invalid public key curve")
+		self.public_key = public_key
 
 	def parameters_to_bytes(self) -> bytes:
-		return struct.pack("32s32s", self.x, self.y)
+		return struct.pack("32s32s", self.public_key.x, self.public_key.y)
 
 	@classmethod
-	def parameters_from_bytes(cls, b: bytes) -> 'PublicKey':
-		return cls(*struct.unpack("32s32s", b))
+	def parameters_from_bytes(cls, b: bytes) -> 'PublicKeyPDU':
+		return cls(crypto.PublicKeyPoint(*struct.unpack("32s32s", b)))
 
 
 class InputComplete(PDU):
@@ -371,8 +372,10 @@ class ProvisionerBearer:
 	END_TRANSACTION_NUMBER = TransactionNumber(0x7F)
 	def __init__(self):
 		self.message_ack_cv = threading.Condition()
+		self.message_did_ack = False
 		self.transaction_assembler = None # type: Reassembler
 		self.transaction_number = self.START_TRANSACTION_NUMBER
+		self.incoming_transaction_number = self.END_TRANSACTION_NUMBER+1
 
 	def open(self):
 		raise NotImplementedError()
@@ -386,6 +389,7 @@ class ProvisionerBearer:
 
 	def message_ackked(self):
 		print("MESSAGE ACKED")
+		self.message_did_ack = True
 		self.transaction_number = TransactionNumber(self.transaction_number + 1)
 		if self.transaction_number > self.END_TRANSACTION_NUMBER:
 			self.transaction_number = self.END_TRANSACTION_NUMBER
@@ -408,6 +412,9 @@ class ProvisionerBearer:
 		print(f"START {start_pdu.transaction_number}")
 		if self.transaction_assembler and self.transaction_assembler.transaction_number == start_pdu.transaction_number:
 			return # we already started this transaction
+		if start_pdu.transaction_number != 0 and start_pdu.transaction_number < self.incoming_transaction_number:
+			return # old transaction
+		self.incoming_transaction_number = start_pdu.transaction_number
 		self.transaction_assembler = Reassembler.from_start_pdu(start_pdu, self.mtu())
 
 
@@ -428,6 +435,9 @@ class ProvisionerBearer:
 		if self.transaction_assembler and self.transaction_assembler.is_done():
 			pdu_data = self.transaction_assembler.payload()
 			self.send_generic_prov_pdus([self.transaction_assembler.ack()])
+			self.incoming_transaction_number = TransactionNumber(self.incoming_transaction_number+1)
+			if self.incoming_transaction_number == 0x100:
+				self.incoming_transaction_number = TransactionNumber(self.END_TRANSACTION_NUMBER+1)
 			self.recv_prov_pdu(PDU.from_bytes(pdu_data))
 			self.transaction_assembler = None
 
@@ -458,14 +468,21 @@ class UnprovisionedDevice:
 		self.worker = threading.Thread(target=self.worker_func)
 		self.worker.start()
 		self.algorithm = None # type: Algorithms
+		self.public_key = PublicKey.NoOOB
 		self.auth_method = AuthenticationMethod.NoOOB
+		self.auth_action = OutputOOBAction.NoAction
+		self.auth_size = 0
 		self.capabilities = None  # type: Capabilities
 
 	def _openned_event(self):
 		self.worker_queue.put(ProvisioningEvent.Connected)
 
 	def open(self):
+		self.worker_queue.put(ProvisioningEvent.Open)
+
+	def do_open(self):
 		self.pb_bearer.open()
+		self.worker_queue.put(ProvisioningEvent.Connected)
 
 	def start(self):
 		self.worker_queue.put(ProvisioningEvent.Start)
@@ -508,7 +525,8 @@ class UnprovisionedDevice:
 		if self.auth_method == AuthenticationMethod.StaticOOB:
 			if not self.capabilities.static_oob_type:
 				raise ValueError("requested static oob when device doesn't support it")
-		self.pb_bearer.send_prov_pdu(Start())
+		self.public_key = PublicKey.NoOOB
+		self.pb_bearer.send_prov_pdu(Start(self.algorithm,self.public_key, self.auth_method, self.auth_action,self.auth_size))
 
 	def worker_func(self):
 		while True:
@@ -610,8 +628,8 @@ class Provisioner:
 
 	def provision(self, device_uuid: UUID):
 		device = self.unprovisioned_devices.get(device_uuid)
+		device.provision_on_connect = True
 		device.open()
-		device.invite()
 
 	def queue_incoming_pdu(self, pdu: bytes):
 		print(pdu)

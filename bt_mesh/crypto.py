@@ -3,7 +3,9 @@ import struct
 from .mesh import *
 from Crypto.Hash import CMAC
 from Crypto.Cipher import AES
-
+from Crypto.PublicKey import ECC
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric import ec
 Salt = NewType("Salt", bytes)
 MAC = NewType("MAC", bytes)
 
@@ -60,7 +62,7 @@ class ApplicationNonce(Nonce):
 								self.iv_index)
 
 
-7
+
 
 
 class DeviceNonce(Nonce):
@@ -136,14 +138,43 @@ class PrivacyKey(Key):
 class DeviceKey(Key):
 	pass
 
-class PublicKeyXY:
-	KEY_LEN = 32
-	__slots__ = 'key_bytes',
 
-	def __init__(self, key_bytes: bytes):
-		if len(key_bytes) != self.KEY_LEN:
-			raise ValueError(f"key len ({len(key_bytes)} not {self.KEY_LEN} bytes long")
-		self.key_bytes = key_bytes
+class ECCKeyPoint:
+	__slots__ = "x", "y",
+	def __init__(self, x: int, y: int):
+		self.x = x
+		self.y = y
+
+ec_curve = ec.SECP256R1()
+
+class ECCPublicKey:
+	__slots__ = "public_key"
+	def __init__(self, public_key: ec.EllipticCurvePublicKey):
+		if public_key.curve != ec_curve:
+			raise ValueError("public key not NIST-256 key")
+		self.public_key = public_key
+
+	def point(self) -> ECCKeyPoint:
+		if self.public_key.curve != ec_curve:
+			raise ValueError("public key not NIST-256 key")
+		nums = self.public_key.public_numbers() # type: ec.EllipticCurvePublicNumbers
+		return ECCKeyPoint(x=nums.x, y=nums.y)
+
+	def verify(self, signature: bytes, data: bytes):
+		return self.public_key.verify(signature, data)
+
+
+class ECCPrivateKey:
+	__slots__ = "private_key",
+	def __init__(self, private_key: ec.EllipticCurvePrivateKey):
+		self.private_key = private_key
+
+	def public_key(self) -> ECCPublicKey:
+		return ECCPublicKey(self.private_key.public_key())
+
+
+
+
 
 
 def aes_cmac(key: Key, data: bytes) -> MAC:
