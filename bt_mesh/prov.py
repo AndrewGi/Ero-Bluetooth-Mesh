@@ -366,16 +366,20 @@ class Reassembler:
 		print(f"segs needed : {bin(self.segs_needed)}")
 		return self.segs_needed == 0
 
+
 TransactionNumber = NewType("TransactionNumber", int)
+
+
 class ProvisionerBearer:
 	START_TRANSACTION_NUMBER = TransactionNumber(0x00)
 	END_TRANSACTION_NUMBER = TransactionNumber(0x7F)
+
 	def __init__(self):
 		self.message_ack_cv = threading.Condition()
 		self.message_did_ack = False
-		self.transaction_assembler = None # type: Reassembler
+		self.transaction_assembler = None  # type: Reassembler
 		self.transaction_number = self.START_TRANSACTION_NUMBER
-		self.incoming_transaction_number = self.END_TRANSACTION_NUMBER+1
+		self.incoming_transaction_number = self.END_TRANSACTION_NUMBER + 1
 
 	def open(self):
 		raise NotImplementedError()
@@ -411,12 +415,11 @@ class ProvisionerBearer:
 	def handle_transaction_start(self, start_pdu: pb_generic.TransactionStartPDU):
 		print(f"START {start_pdu.transaction_number}")
 		if self.transaction_assembler and self.transaction_assembler.transaction_number == start_pdu.transaction_number:
-			return # we already started this transaction
+			return  # we already started this transaction
 		if start_pdu.transaction_number != 0 and start_pdu.transaction_number < self.incoming_transaction_number:
-			return # old transaction
+			return  # old transaction
 		self.incoming_transaction_number = start_pdu.transaction_number
 		self.transaction_assembler = Reassembler.from_start_pdu(start_pdu, self.mtu())
-
 
 	def recv_generic_prov_pdu(self, incoming_pdu: pb_generic.GenericProvisioningPDU):
 		print(incoming_pdu)
@@ -435,15 +438,39 @@ class ProvisionerBearer:
 		if self.transaction_assembler and self.transaction_assembler.is_done():
 			pdu_data = self.transaction_assembler.payload()
 			self.send_generic_prov_pdus([self.transaction_assembler.ack()])
-			self.incoming_transaction_number = TransactionNumber(self.incoming_transaction_number+1)
+			self.incoming_transaction_number = TransactionNumber(self.incoming_transaction_number + 1)
 			if self.incoming_transaction_number == 0x100:
-				self.incoming_transaction_number = TransactionNumber(self.END_TRANSACTION_NUMBER+1)
+				self.incoming_transaction_number = TransactionNumber(self.END_TRANSACTION_NUMBER + 1)
 			self.recv_prov_pdu(PDU.from_bytes(pdu_data))
 			self.transaction_assembler = None
 
 	def __del__(self):
 		self.close(pb_generic.LinkCloseReason.Fail)
 
+
+class ConfirmationPackets:
+	__slots__ = "prov_invite", "prov_capabilities", "prov_start", "prov_public_key", "device_public_key"
+
+	def __init__(self):
+		self.prov_invite = None  # type: Optional[Invite]
+		self.prov_capabilities = None  # type: Optional[Capabilities]
+		self.prov_start = None  # type: Optional[Start]
+		self.prov_public_key = None  # type: Optional[PublicKeyPDU]
+		self.device_public_key = None  # type: Optional[PublicKeyPDU]
+
+	def is_ready(self) -> bool:
+		for slot in self.__slots__:
+			if getattr(self, slot) is None:
+				return False
+		return True
+
+	def confirmation_input(self) -> bytes:
+		if not self.is_ready():
+			raise ValueError("missing confirmation packets")
+		return self.prov_invite.to_bytes() + self.prov_capabilities.to_bytes() + self.prov_start.to_bytes() + self.prov_public_key.to_bytes() + self.device_public_key.to_bytes()
+
+	def confirmation_salt(self) -> bytes:
+		return crypto.s1(self.confirmation_input())
 
 # the numbers don't matter
 class ProvisioningEvent(enum.IntEnum):
@@ -467,7 +494,7 @@ class UnprovisionedDevice:
 		self.worker_queue = queue.Queue()
 		self.worker = threading.Thread(target=self.worker_func)
 		self.worker.start()
-		self.algorithm = None # type: Algorithms
+		self.algorithm = None  # type: Algorithms
 		self.public_key = PublicKey.NoOOB
 		self.auth_method = AuthenticationMethod.NoOOB
 		self.auth_action = OutputOOBAction.NoAction
@@ -526,7 +553,8 @@ class UnprovisionedDevice:
 			if not self.capabilities.static_oob_type:
 				raise ValueError("requested static oob when device doesn't support it")
 		self.public_key = PublicKey.NoOOB
-		self.pb_bearer.send_prov_pdu(Start(self.algorithm,self.public_key, self.auth_method, self.auth_action,self.auth_size))
+		self.pb_bearer.send_prov_pdu(
+			Start(self.algorithm, self.public_key, self.auth_method, self.auth_action, self.auth_size))
 
 	def worker_func(self):
 		while True:

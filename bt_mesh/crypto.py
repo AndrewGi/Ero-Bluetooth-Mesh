@@ -1,9 +1,10 @@
 import enum
 import struct
 from .mesh import *
-from Crypto.Hash import CMAC
-from Crypto.Cipher import AES
-from Crypto.PublicKey import ECC
+from cryptography.hazmat.primitives import cmac
+from cryptography.hazmat.primitives.ciphers import algorithms, Cipher, CipherContext
+from cryptography.hazmat.primitives.ciphers.aead import AESCCM
+from cryptography.hazmat.primitives.ciphers.modes import ECB
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import ec
 Salt = NewType("Salt", bytes)
@@ -154,6 +155,7 @@ class ECCPublicKey:
 			raise ValueError("public key not NIST-256 key")
 		self.public_key = public_key
 
+	@property
 	def point(self) -> ECCKeyPoint:
 		if self.public_key.curve != ec_curve:
 			raise ValueError("public key not NIST-256 key")
@@ -161,7 +163,7 @@ class ECCPublicKey:
 		return ECCKeyPoint(x=nums.x, y=nums.y)
 
 	def verify(self, signature: bytes, data: bytes):
-		return self.public_key.verify(signature, data)
+		return self.public_key.verify(signature, data, sig
 
 
 class ECCPrivateKey:
@@ -178,28 +180,35 @@ class ECCPrivateKey:
 
 
 def aes_cmac(key: Key, data: bytes) -> MAC:
-	return MAC(CMAC.new(key.key_bytes, data, ciphermod=AES, mac_len=16).digest())
+	c = cmac.CMAC(algorithms.AES(key.key_bytes), backend=default_backend())
+	c.update(data)
+	return MAC(c.finalize())
 
 
-def aes_ccm_encrypt(key: Key, nonce: Nonce, data: bytes, mic_len=32) -> Tuple[bytes, MIC]:
-	if data is None:
-		data = bytes()
-	aes = AES.new(key=key.key_bytes, mode=AES.MODE_CCM, nonce=nonce.as_be_bytes(), mac_len=mic_len)
-	encrypted_data, digest = aes.encrypt_and_digest(data)
-	return encrypted_data, MIC(digest)
+def aes_ccm_encrypt(key: Key, nonce: Nonce, data: bytes, mic_len=32, associated_data: Optional[bytes] = None) -> Tuple[bytes, MIC]:
+	tag_len = mic_len // 8
+	aesccm = AESCCM(key.key_bytes, tag_len)
+	raw = aesccm.encrypt(nonce, data, associated_data)
+	mic = MIC(raw[-tag_len:])
+	return raw[:-tag_len], mic
 
-def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic_len=32):
-	pass
+def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_data: Optional[bytes] = None) -> bytes:
+	tag_len = len(mic.bytes_be)
+	aesccm = AESCCM(key.key_bytes, tag_len)
+	return aesccm.decrypt(nonce.as_be_bytes(), data + mic.bytes_be, associated_data)
 
 
 def be_encrypt(key: Key, clear_text: bytes) -> bytes:
-	aes = AES.new(key=key.key_bytes, mode=AES.MODE_ECB)
-	return aes.encrypt(clear_text)
+	encryptor = Cipher(algorithms.AES(key=key.key_bytes), ECB(), default_backend()).encryptor() # type: CipherContext
+	encryptor.update(clear_text)
+	return encryptor.finalize()
 
 
-def s1(m: str) -> Salt:
+def s1(m: Union[bytes, str]) -> Salt:
 	assert m, "m can not be empty"
-	return Salt(aes_cmac(Key(b'\x00' * Key.KEY_LEN), m.encode()))
+	if isinstance(m, str):
+		m = m.encode()
+	return Salt(aes_cmac(Key(b'\x00' * Key.KEY_LEN), m))
 
 
 def k1(salt: Salt, key: Key, info: bytes) -> MAC:
