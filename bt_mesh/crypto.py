@@ -7,6 +7,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 from cryptography.hazmat.primitives.ciphers.modes import ECB
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import ec
+
 Salt = NewType("Salt", bytes)
 MAC = NewType("MAC", bytes)
 
@@ -61,9 +62,6 @@ class ApplicationNonce(Nonce):
 	def as_be_bytes(self) -> bytes:
 		return self.STRUCT.pack(self.nonce_type, self.aszmic << 7, seq_bytes(self.seq), self.src, self.dst,
 								self.iv_index)
-
-
-
 
 
 class DeviceNonce(Nonce):
@@ -142,14 +140,18 @@ class DeviceKey(Key):
 
 class ECCKeyPoint:
 	__slots__ = "x", "y",
+
 	def __init__(self, x: int, y: int):
 		self.x = x
 		self.y = y
 
+
 ec_curve = ec.SECP256R1()
+
 
 class ECCPublicKey:
 	__slots__ = "public_key"
+
 	def __init__(self, public_key: ec.EllipticCurvePublicKey):
 		if public_key.curve != ec_curve:
 			raise ValueError("public key not NIST-256 key")
@@ -159,24 +161,34 @@ class ECCPublicKey:
 	def point(self) -> ECCKeyPoint:
 		if self.public_key.curve != ec_curve:
 			raise ValueError("public key not NIST-256 key")
-		nums = self.public_key.public_numbers() # type: ec.EllipticCurvePublicNumbers
+		nums = self.public_key.public_numbers()  # type: ec.EllipticCurvePublicNumbers
 		return ECCKeyPoint(x=nums.x, y=nums.y)
 
-	def verify(self, signature: bytes, data: bytes):
-		return self.public_key.verify(signature, data, sig
+	@classmethod
+	def from_point(cls, point: ECCKeyPoint) -> 'ECCPublicKey':
+		return cls(ec.EllipticCurvePublicNumbers(point.x, point.y, ec_curve).public_key(default_backend()))
+
+
+class ECCSharedSecret(Key):
+	def __init__(self, secret_bytes: bytes):
+		super().__init__(secret_bytes)
 
 
 class ECCPrivateKey:
 	__slots__ = "private_key",
+
 	def __init__(self, private_key: ec.EllipticCurvePrivateKey):
 		self.private_key = private_key
 
 	def public_key(self) -> ECCPublicKey:
 		return ECCPublicKey(self.private_key.public_key())
 
+	@classmethod
+	def generate(cls) -> 'ECCPrivateKey':
+		return cls(ec.generate_private_key(ec_curve, default_backend()))
 
-
-
+	def make_shared_secret(self, peer_public: ECCPublicKey) -> ECCSharedSecret:
+		return ECCSharedSecret(self.private_key.exchange(ec.ECDH(), peer_public.public_key))
 
 
 def aes_cmac(key: Key, data: bytes) -> MAC:
@@ -185,23 +197,31 @@ def aes_cmac(key: Key, data: bytes) -> MAC:
 	return MAC(c.finalize())
 
 
-def aes_ccm_encrypt(key: Key, nonce: Nonce, data: bytes, mic_len=32, associated_data: Optional[bytes] = None) -> Tuple[bytes, MIC]:
+def aes_ccm_encrypt(key: Key, nonce: Nonce, data: bytes, mic_len=32, associated_data: Optional[bytes] = None) -> Tuple[
+	bytes, MIC]:
 	tag_len = mic_len // 8
-	aesccm = AESCCM(key.key_bytes, tag_len)
-	raw = aesccm.encrypt(nonce, data, associated_data)
+	aes_ccm = AESCCM(key.key_bytes, tag_len)
+	raw = aes_ccm.encrypt(nonce, data, associated_data)
 	mic = MIC(raw[-tag_len:])
 	return raw[:-tag_len], mic
 
+
 def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_data: Optional[bytes] = None) -> bytes:
 	tag_len = len(mic.bytes_be)
-	aesccm = AESCCM(key.key_bytes, tag_len)
-	return aesccm.decrypt(nonce.as_be_bytes(), data + mic.bytes_be, associated_data)
+	aes_ccm = AESCCM(key.key_bytes, tag_len)
+	return aes_ccm.decrypt(nonce.as_be_bytes(), data + mic.bytes_be, associated_data)
 
 
 def be_encrypt(key: Key, clear_text: bytes) -> bytes:
-	encryptor = Cipher(algorithms.AES(key=key.key_bytes), ECB(), default_backend()).encryptor() # type: CipherContext
+	encryptor = Cipher(algorithms.AES(key=key.key_bytes), ECB(), default_backend()).encryptor()  # type: CipherContext
 	encryptor.update(clear_text)
 	return encryptor.finalize()
+
+
+def be_decrypt(key: Key, cipher_text: bytes) -> bytes:
+	decryptor = Cipher(algorithms.AES(key=key.key_bytes), ECB(), default_backend()).decryptor()  # type: CipherContext
+	decryptor.update(cipher_text)
+	return decryptor.finalize()
 
 
 def s1(m: Union[bytes, str]) -> Salt:
@@ -244,4 +264,4 @@ def k4(n: bytes) -> int:
 
 def id128(n: Key, s: str) -> bytes:
 	salt = s1(s)
-	return k1(salt, n, "id128\x01")
+	return k1(salt, n, b"id128\x01")
