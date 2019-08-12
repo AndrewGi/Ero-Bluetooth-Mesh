@@ -1,4 +1,5 @@
 import enum
+import os
 import struct
 from .mesh import *
 from cryptography.hazmat.primitives import cmac
@@ -7,9 +8,20 @@ from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 from cryptography.hazmat.primitives.ciphers.modes import ECB
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.exceptions import InvalidTag
 
 Salt = NewType("Salt", bytes)
+ProvisioningSalt = NewType("ProvisioningSalt", Salt)
 MAC = NewType("MAC", bytes)
+NetworkID = NewType("NetworkID", int)
+
+
+def data_and_mic_bytes(v: Tuple[bytes, MIC]) -> bytes:
+	return v[0] + v[1].bytes_be
+
+
+class InvalidMIC(Exception):
+	pass
 
 
 class NonceType(enum.IntEnum):
@@ -44,7 +56,7 @@ class NetworkNonce(Nonce):
 
 	def as_be_bytes(self) -> bytes:
 		ctl_ttl = (self.ctl << 7) | self.ttl
-		return self.STRUCT.pack(self.nonce_type, ctl_ttl, seq_bytes(self.seq), self.src, self.iv_index)
+		return self.STRUCT.pack(self.nonce_type, ctl_ttl, seq_bytes(self.seq), self.src, self.iv_index.index)
 
 
 class ApplicationNonce(Nonce):
@@ -61,7 +73,7 @@ class ApplicationNonce(Nonce):
 
 	def as_be_bytes(self) -> bytes:
 		return self.STRUCT.pack(self.nonce_type, self.aszmic << 7, seq_bytes(self.seq), self.src, self.dst,
-								self.iv_index)
+								self.iv_index.index)
 
 
 class DeviceNonce(Nonce):
@@ -117,13 +129,15 @@ class Key:
 	def __eq__(self, other: 'Key') -> bool:
 		return self.key_bytes == other.key_bytes
 
+	@classmethod
+	def _random_key(cls) -> 'Key':
+		return cls(os.urandom(cls.KEY_LEN))
+
 
 class Appkey(Key):
-	pass
-
-
-class NetworkKey(Key):
-	pass
+	@classmethod
+	def random(cls) -> 'Appkey':
+		return cast(cls, cls.random())
 
 
 class EncryptionKey(Key):
@@ -134,8 +148,26 @@ class PrivacyKey(Key):
 	pass
 
 
+class NetworkKey(Key):
+	@classmethod
+	def random(cls) -> 'NetworkKey':
+		return cast(cls, cls.random())
+
+	def nid_encryption_privacy(self) -> Tuple[NID, EncryptionKey, PrivacyKey]:
+		return k2(self, bytes([0x00]))
+
+	def security_material(self) -> 'NetworkSecurityMaterial':
+		nid, encryption, privacy = self.nid_encryption_privacy()
+		return NetworkSecurityMaterial(self.network_id(), nid, self, encryption, privacy)
+
+	def network_id(self) -> NetworkID:
+		return NetworkID(k3(self))
+
+
 class DeviceKey(Key):
-	pass
+	@classmethod
+	def from_salt_and_secret(cls, salt: ProvisioningSalt, secret: 'ECDHSharedSecret') -> 'DeviceKey':
+		return cls(k1(salt, secret, b"prdk"))
 
 
 class ECCKeyPoint:
@@ -169,7 +201,7 @@ class ECCPublicKey:
 		return cls(ec.EllipticCurvePublicNumbers(point.x, point.y, ec_curve).public_key(default_backend()))
 
 
-class ECCSharedSecret(Key):
+class ECDHSharedSecret(Key):
 	def __init__(self, secret_bytes: bytes):
 		super().__init__(secret_bytes)
 
@@ -187,8 +219,8 @@ class ECCPrivateKey:
 	def generate(cls) -> 'ECCPrivateKey':
 		return cls(ec.generate_private_key(ec_curve, default_backend()))
 
-	def make_shared_secret(self, peer_public: ECCPublicKey) -> ECCSharedSecret:
-		return ECCSharedSecret(self.private_key.exchange(ec.ECDH(), peer_public.public_key))
+	def make_shared_secret(self, peer_public: ECCPublicKey) -> ECDHSharedSecret:
+		return ECDHSharedSecret(self.private_key.exchange(ec.ECDH(), peer_public.public_key))
 
 
 def aes_cmac(key: Key, data: bytes) -> MAC:
@@ -209,16 +241,85 @@ def aes_ccm_encrypt(key: Key, nonce: Nonce, data: bytes, mic_len=32, associated_
 def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_data: Optional[bytes] = None) -> bytes:
 	tag_len = len(mic.bytes_be)
 	aes_ccm = AESCCM(key.key_bytes, tag_len)
-	return aes_ccm.decrypt(nonce.as_be_bytes(), data + mic.bytes_be, associated_data)
+	try:
+		return aes_ccm.decrypt(nonce.as_be_bytes(), data + mic.bytes_be, associated_data)
+	except InvalidTag:
+		raise InvalidMIC()
 
 
-def be_encrypt(key: Key, clear_text: bytes) -> bytes:
+class SecurityMaterial:
+	pass
+
+
+class TransportSecurityMaterial(SecurityMaterial):
+	__slots__ = "key"
+
+	def __init__(self, key: crypto.Key):
+		self.key = key
+
+	def aes_ccm_encrypt(self, nonce: Nonce, data: bytes, mic_len: Optional[int] = 32,
+						associated_data: Optional[bytes] = None) -> \
+			Tuple[bytes, MIC]:
+		return aes_ccm_encrypt(self.key, nonce, data, mic_len, associated_data)
+
+	def aes_ccm_decrypt(self, nonce: Nonce, data: bytes, mic: MIC, associated_data: Optional[bytes] = None) -> bytes:
+		return aes_ccm_decrypt(self.key, nonce, data, mic, associated_data)
+
+	def transport_encrypt(self, nonce: Nonce, data: bytes, big_mic: Optional[bool] = False,
+						  virtual_address: Optional[VirtualAddress] = None) -> Tuple[bytes, MIC]:
+		return self.aes_ccm_encrypt(nonce, data, 64 if big_mic else 32,
+									virtual_address.uuid.bytes if virtual_address else None)
+
+	def transport_decrypt(self, nonce: Nonce, data: bytes, mic: MIC,
+						  virtual_address: Optional[VirtualAddress] = None) -> bytes:
+		return self.aes_ccm_decrypt(nonce, data, mic, virtual_address.uuid.bytes if virtual_address else None)
+
+
+class AppSecurityMaterial(TransportSecurityMaterial):
+	def __init__(self, key: Appkey, aid: AID):
+		super().__init__(key)
+		self.aid = aid
+
+	@classmethod
+	def from_key(cls, key: Appkey):
+		return cls(key, AID(k4(key.key_bytes)))
+
+
+class DeviceSecurityMaterial(TransportSecurityMaterial):
+	def __init__(self, key: DeviceKey):
+		super().__init__(key)
+
+	def transport_encrypt(self, nonce: DeviceNonce, data: bytes, big_mic: Optional[bool] = False, _va: None = None) -> \
+			Tuple[bytes, MIC]:
+		if _va:
+			raise ValueError("device security material doesn't take a virtual address")
+		return self.aes_ccm_encrypt(nonce, data, 64 if big_mic else 32)
+
+	def transport_decrypt(self, nonce: DeviceNonce, data: bytes, mic: MIC, _va: None = None) -> bytes:
+		if _va:
+			raise ValueError("device security material doesn't take a virtual address")
+		return self.aes_ccm_decrypt(nonce, data, mic)
+
+
+class NetworkSecurityMaterial(SecurityMaterial):
+	__slots__ = "network_id", "nid", "net_key", "encryption_key", "privacy_key"
+
+	def __init__(self, network_id: NetworkID, nid: NID, net_key: NetworkKey, encryption_key: EncryptionKey,
+				 privacy_key: PrivacyKey):
+		self.network_id = network_id
+		self.nid = nid
+		self.net_key = net_key
+		self.encryption_key = encryption_key
+		self.privacy_key = privacy_key
+
+
+def aes_ecb_encrypt(key: Key, clear_text: bytes) -> bytes:
 	encryptor = Cipher(algorithms.AES(key=key.key_bytes), ECB(), default_backend()).encryptor()  # type: CipherContext
 	encryptor.update(clear_text)
 	return encryptor.finalize()
 
 
-def be_decrypt(key: Key, cipher_text: bytes) -> bytes:
+def aes_ecb_decrypt(key: Key, cipher_text: bytes) -> bytes:
 	decryptor = Cipher(algorithms.AES(key=key.key_bytes), ECB(), default_backend()).decryptor()  # type: CipherContext
 	decryptor.update(cipher_text)
 	return decryptor.finalize()
@@ -265,3 +366,18 @@ def k4(n: bytes) -> int:
 def id128(n: Key, s: str) -> bytes:
 	salt = s1(s)
 	return k1(salt, n, b"id128\x01")
+
+
+class NetworkAppKeys:
+
+	def __init__(self, net_sm: NetworkSecurityMaterial):
+		self.net_sm = net_sm
+		self.app_sms: List[AppSecurityMaterial] = list()
+
+	def get_aid(self, aid: AID) -> Generator[AppSecurityMaterial, None, None]:
+		for app_sm in self.app_sms:
+			if app_sm.aid == aid:
+				yield app_sm
+
+	def add_app_security_material(self, app_sm: AppSecurityMaterial):
+		self.app_sms.append(app_sm)

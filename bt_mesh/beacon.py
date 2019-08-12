@@ -1,34 +1,69 @@
+import struct
 from uuid import UUID
 import datetime
 from . import ble
 import enum
 
+
 class BeaconType(enum.IntEnum):
 	UnprovisionedDevice = 0x00
 	SecureNetwork = 0x01
 
+
+beacon_classes = dict()  # type: Dict[BeaconType, type]
 class Beacon:
-	pass
+	__slots__ = "beacon_type",
 
-class SecureBeacon:
-	pass
+	def __init__(self, beacon_type: BeaconType):
+		self.beacon_type = beacon_type
 
-class UnprovisionedBeacon:
-	__slots__ = "bt_address", "oob", "dev_uuid", "uri_hash", "last_seen"
-	def __init__(self, bt_address: ble.BTAddress, oob: bytes, dev_uuid: UUID, uri_hash: bytes, last_seen: datetime.datetime):
-		self.bt_address = bt_address
+	def beacon_to_bytes(self) -> bytes:
+		raise NotImplementedError()
+
+	@classmethod
+	def beacon_from_bytes(cls, b: bytes):
+		raise NotImplementedError()
+
+	def to_bytes(self):
+		return self.beacon_type.to_bytes(1, byteorder='big') + self.to_bytes()
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'Beacon':
+		return cls.beacon_classes[BeaconType(b[0])](b[1:])
+
+
+class SecureBeacon(Beacon):
+	def __init__(self):
+		super().__init__(BeaconType.SecureNetwork)
+
+
+class UnprovisionedBeacon(Beacon):
+	STRUCT = struct.Struct("!16pH")
+	__slots__ = "oob", "dev_uuid", "uri_hash", "last_seen"
+
+	def __init__(self, oob: bytes, dev_uuid: UUID, uri_hash: bytes, last_seen: datetime.datetime):
+		super().__init__(BeaconType.UnprovisionedDevice)
 		self.oob = oob
 		self.uri_hash = uri_hash
 		self.dev_uuid = dev_uuid
 		self.last_seen = last_seen
 
 	@classmethod
-	def from_bytes(cls, b: bytes, bt_address: ble.BTAddress, last_seen: datetime.datetime) -> 'UnprovisionedBeacon':
-		if b[0] != BeaconType.UnprovisionedDevice:
-			raise ValueError("unrecognized beacon message")
-		if len(b)>18:
-			uri_hash = b[19:]
+	def beacon_from_bytes(cls, b: bytes) -> 'UnprovisionedBeacon':
+		uuid_bytes, oob = cls.STRUCT.unpack(b)
+		if len(b) > cls.STRUCT.size:
+			uri_hash = b[cls.STRUCT.size:]
 		else:
 			uri_hash = None
-		return cls(bt_address, b[17:19], UUID(bytes=b[1:17]), uri_hash, last_seen)
+		return cls(oob, UUID(bytes=uuid_bytes), uri_hash, datetime.datetime.now())
 
+	def beacon_to_bytes(self) -> bytes:
+		b = self.STRUCT.pack(self.dev_uuid.bytes, self.oob)
+		if self.uri_hash:
+			return b + self.uri_hash
+		else:
+			return b
+
+
+beacon_classes[BeaconType.UnprovisionedDevice] = UnprovisionedBeacon
+beacon_classes[BeaconType.SecureNetwork] = SecureBeacon

@@ -1,6 +1,6 @@
 import datetime
 
-from . import beacon, prov
+from . import beacon, prov, net
 import queue
 import threading
 from typing import *
@@ -33,7 +33,8 @@ class Network:
 			self._handle_raw_net_pdu(item)
 			self.incoming_net_pdus.task_done()
 
-	def _handle_raw_net_pdu(self, raw_net_pdu: bytes):
+	def _handle_net_raw_pdu(self, raw_net_pdu: bytes):
+		net.PDU.from_bytes(raw_net_pdu)
 		pass
 
 	def _send_raw_network_pdu(self, raw_network_pdu: bytes):
@@ -42,15 +43,21 @@ class Network:
 
 	def add_bearer(self, bearer):
 		bearer.network = self
-		if not self.provisioner.pb_bearer:
-			self.provisioner.set_bearer(bearer)
 		self.bearers.append(bearer)
 
-	def handle_beacon(self, in_beacon: beacon.UnprovisionedBeacon):
+	def handle_unprovisioned_beacon(self, in_beacon: beacon.UnprovisionedBeacon):
 		if self.provisioner:
 			self.provisioner.handle_beacon(in_beacon)
 
+	def handle_secure_beacon(self, in_beacon: beacon.SecureBeacon):
+		pass
 
+	def handle_beacon(self, in_beacon: beacon.Beacon):
+		if in_beacon.beacon_type == beacon.BeaconType.UnprovisionedDevice:
+			self.handle_unprovisioned_beacon(in_beacon)
+		elif in_beacon.beacon_type == beacon.BeaconType.SecureNetwork:
+			self.handle_secure_beacon(in_beacon)
+		raise NotImplementedError("unrecognized beacon type")
 
 	def handle_raw_network_pdu(self, network_pdu: bytes):
-		pass
+		self.incoming_net_pdus.put(network_pdu)

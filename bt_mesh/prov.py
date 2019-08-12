@@ -336,10 +336,7 @@ class Reassembler:
 		if seg_i <= 0:
 			return pos
 		pos += self.start_seg_len
-		if seg_i == 1:
-			return pos
-		for _ in range(seg_i - 1):
-			pos += self.continue_seg_len
+		pos += self.continue_seg_len * (seg_i-1)
 		return pos
 
 	def insert_segment(self, seg_i: int, data: bytes):
@@ -504,7 +501,7 @@ class ConfirmationSalt:
 	def salt(self) -> crypto.Salt:
 		return crypto.Salt(self.salt_bytes)
 
-	def to_key(self, ecdh_secret: crypto.ECCSharedSecret) -> ConfirmationKey:
+	def to_key(self, ecdh_secret: crypto.ECDHSharedSecret) -> ConfirmationKey:
 		return ConfirmationKey(crypto.k1(self.salt(), ecdh_secret, "prck".encode()))
 
 
@@ -773,41 +770,14 @@ class UnprovisionedDevicesCollection:
 
 
 class Provisioner:
-	DEFAULT_TIMEOUT_UNPROV = datetime.timedelta(minutes=1)
 
-	def __init__(self, default_bearer: Optional[ProvisionerBearer],
-				 timeout_unprov: object = DEFAULT_TIMEOUT_UNPROV):
-		self.timeout_unprov = timeout_unprov
-		self.pb_bearer = default_bearer
-		self.incoming_pdus = queue.Queue()
-		self.incoming_pdus_thread = threading.Thread(target=self.incoming_pdu_worker)
-		self.incoming_pdus_thread.start()
+	def __init__(self):
 		self.unprovisioned_devices = UnprovisionedDevicesCollection()
-
-	def set_bearer(self, pb_bearer: ProvisionerBearer):
-		self.pb_bearer = pb_bearer
-		self.pb_bearer.recv_generic_prov_pdu = self.queue_incoming_pdu
-
-	def incoming_pdu_worker(self):
-		while True:
-			item = self.incoming_pdus.get()
-			print(item)
-			if not item:
-				break
-			self.handle_pdu(item)
-			self.incoming_pdus.task_done()
 
 	def provision(self, device_uuid: UUID):
 		device = self.unprovisioned_devices.get(device_uuid)
 		device.provision_on_connect = True
 		device.open()
-
-	def queue_incoming_pdu(self, pdu: bytes):
-		print(pdu)
-		self.incoming_pdus.put(PDU.from_bytes(pdu))
-
-	def handle_pdu(self, pdu: PDU):
-		print(f"PDU TYPE: {pdu.pdu_type}")
 
 	def handle_beacon(self, new_beacon: beacon.UnprovisionedBeacon) -> UnprovisionedDevice:
 		return self.unprovisioned_devices.add_beacon(new_beacon)
