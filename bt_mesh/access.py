@@ -74,7 +74,7 @@ class ModelIdentifier:
 
 class AccessPayload:
 	MAX_SIZE = 380
-	__slots__ = ("opcode", "parameters")
+	__slots__ = ("opcode", "parameters", "big_mic")
 
 	def __init__(self, opcode: Opcode, parameters: bytes):
 		if len(parameters) > 380:
@@ -85,7 +85,7 @@ class AccessPayload:
 	def __len__(self) -> int:
 		return len(self.opcode) + len(self.parameters)
 
-	def as_bytes(self) -> bytes:
+	def to_bytes(self) -> bytes:
 		return self.opcode.as_bytes() + self.parameters
 
 	@classmethod
@@ -95,18 +95,23 @@ class AccessPayload:
 
 
 class AccessMessage:
-	__slots__ = "src", "dst", "opcode", "payload", "big_trans_mic", "ttl"
+	__slots__ = "src", "dst", "opcode", "payload", "big_mic", "ttl", "appkey_index", "netkey_index", "device_key", "force_segment"
 
-	def __init__(self, src: Address, dst: Address, ttl: TTL, opcode: Opcode, payload: bytes,
-				 big_trans_mic: Optional[bool] = False):
+	def __init__(self, src: Address, dst: Address, ttl: TTL, opcode: Opcode, payload: bytes, appkey_index: Optional[AppKeyIndex],
+				 netkey_index: NetKeyIndex, big_mic: Optional[bool] = False, device_key: Optional[bool] = False, force_segment: Optional[bool] = False):
+		if device_key and appkey_index is not None:
+			raise ValueError("device key True but also given an appkey_index")
 		self.src = src
 		self.dst = dst
 		self.ttl = ttl
 		self.opcode = opcode
 		self.payload = payload
-		self.big_trans_mic = big_trans_mic
+		self.appkey_index = appkey_index
+		self.netkey_index = netkey_index
+		self.big_mic = big_mic
+		self.device_key = device_key
+		self.force_segment = force_segment
 
 	def payload(self) -> AccessPayload:
 		return AccessPayload(self.opcode, self.payload)
 
-	def to_upper(self):

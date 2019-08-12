@@ -2,7 +2,7 @@ import datetime
 import time
 from typing import *
 from . import bleson
-from .. import beacon, ble
+from .. import beacon
 from ..bearers import pb_adv
 class BlesonBearer(pb_adv.AdvBearer):
 
@@ -24,7 +24,6 @@ class BlesonBearer(pb_adv.AdvBearer):
 			self.recv_network_pdu(advertisement.network_pdu)
 
 		if advertisement.beacon_payload:
-			a = ble.BTAddress(bytes(int(i, base=16) for i in advertisement.address.address.split(":")))
 			self.recv_beacon(beacon.UnprovisionedBeacon.from_bytes(advertisement.beacon_payload, a, datetime.datetime.now()))
 
 		if advertisement.pb_adv_pdu:

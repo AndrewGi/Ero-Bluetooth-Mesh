@@ -2,7 +2,7 @@ from applications.bluetooth_mesh.bt_mesh import crypto, mesh
 import unittest
 
 
-app_key = crypto.Appkey.from_int(0x3216d1509884b533248541792b877f98)
+app_key = crypto.AppKey.from_int(0x3216d1509884b533248541792b877f98)
 net_key = crypto.NetworkKey.from_int(0xf7a2a44f8e8a8029064f173ddc1e2b00)
 dev_key = crypto.DeviceKey.from_int(0x37c612c4a2d337cb7b98355531b3617f)
 

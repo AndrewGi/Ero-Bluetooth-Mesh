@@ -1,7 +1,7 @@
 import struct
 
 from .mesh import *
-from . import crypto, security
+from . import crypto
 import enum
 
 
@@ -27,6 +27,9 @@ class UpperEncryptedAccessPDU:
 		self.data = data
 		self.mic = mic
 
+	def __len__(self) -> int:
+		return len(self.data) + len(self.mic)
+
 	def akf(self) -> bool:
 		return self.aid is not None
 
@@ -40,6 +43,30 @@ class UpperEncryptedAccessPDU:
 		return cls(aid, b[:mic_size], mic)
 
 
+	@overload
+	def decrypt(self, nonce: crypto.DeviceNonce, sm: crypto.DeviceSecurityMaterial) -> 'UpperAccessPDU':
+		...
+
+	@overload
+	def decrypt(self, nonce: crypto.ApplicationNonce, sm: crypto.AppSecurityMaterial,
+				virtual_address: Optional[VirtualAddress] = None) -> 'UpperAccessPDU':
+		...
+
+	def decrypt(self, nonce: crypto.Nonce, sm: crypto.TransportSecurityMaterial,
+				virtual_address: Optional[VirtualAddress] = None) -> 'UpperAccessPDU':
+		return UpperAccessPDU(sm.transport_decrypt(nonce, self.data, self.mic, virtual_address), self.mic.mic_len() == 64)
+
+	def should_segment(self) -> bool:
+		return len(self) <= UnsegmentedAccessLowerPDU.MAX_UPPER_LEN
+
+	def unsegmented(self) -> 'UnsegmentedAccessLowerPDU':
+		if self.should_segment():
+			raise OverflowError(f"max unsegmented size is {UnsegmentedAccessLowerPDU.MAX_UPPER_LEN} but message size is {len(self)}")
+		return UnsegmentedAccessLowerPDU(self.aid is not None, self.aid, crypto.data_and_mic_bytes(self.data, self.mic))
+
+	def segmented(self, start_seq: Seq) -> Generator['SegmentedAccessLowerPDU', None, None]:
+		
+
 class UpperAccessPDU:
 	__slots__ = "payload", "big_mic"
 
@@ -48,36 +75,20 @@ class UpperAccessPDU:
 		self.big_mic = big_mic
 
 	@overload
-	def encrypt(self, sm: crypto.DeviceSecurityMaterial) -> UpperEncryptedAccessPDU:
+	def encrypt(self, nonce: crypto.DeviceNonce, sm: crypto.DeviceSecurityMaterial) -> UpperEncryptedAccessPDU:
 		...
 
 	@overload
-	def encrypt(self, sm: crypto.AppSecurityMaterial,
+	def encrypt(self, nonce: crypto.ApplicationNonce, sm: crypto.AppSecurityMaterial,
 				virtual_address: Optional[VirtualAddress] = None) -> UpperEncryptedAccessPDU:
 		...
 
-	def encrypt(self, sm: crypto.TransportSecurityMaterial,
+	def encrypt(self, nonce: crypto.Nonce, sm: crypto.TransportSecurityMaterial,
 				virtual_address: Optional[VirtualAddress] = None) -> UpperEncryptedAccessPDU:
-		data, mic = sm.transport_encrypt(self.payload, self.big_mic, virtual_address)
 		is_app = isinstance(sm, crypto.AppSecurityMaterial)
 		aid = cast(crypto.AppSecurityMaterial, sm).aid() if is_app else None
+		data, mic = sm.transport_encrypt(nonce, self.payload, self.big_mic, virtual_address)
 		return UpperEncryptedAccessPDU(aid, data, mic)
-
-	@classmethod
-	@overload
-	def decrypt(cls, b: bytes, mic: MIC, sm: crypto.DeviceSecurityMaterial) -> 'UpperAccessPDU':
-		...
-
-	@classmethod
-	@overload
-	def decrypt(cls, b: bytes, mic: MIC, sm: crypto.AppSecurityMaterial,
-				virtual_address: Optional[VirtualAddress] = None) -> 'UpperAccessPDU':
-		...
-
-	@classmethod
-	def decrypt(cls, b: bytes, mic: MIC, sm: crypto.TransportSecurityMaterial,
-				virtual_address: Optional[VirtualAddress] = None) -> 'UpperAccessPDU':
-		return cls(sm.transport_decrypt(b, mic, virtual_address), mic.mic_len() == 64)
 
 
 class LowerPDU:
@@ -108,9 +119,12 @@ def extract_seq_zero(b: bytes) -> Tuple[bool, int, int, int]:
 
 
 class UnsegmentedAccessLowerPDU(LowerPDU):
+	MAX_UPPER_LEN = 15
 	__slots__ = "afk", "aid", "upper_pdu"
 
 	def __init__(self, afk: bool, aid: AID, upper_pdu: bytes):
+		if len(upper_pdu) > self.MAX_UPPER_LEN:
+			raise ValueError(f"upper_pdu max {self.MAX_UPPER_LEN} bytes but given {len(upper_pdu)}")
 		self.afk = afk
 		self.aid = aid
 		self.upper_pdu = upper_pdu
@@ -196,25 +210,53 @@ class SegmentedControlLowerPDU(LowerPDU):
 	def is_end(self) -> bool:
 		return self.seg_n == self.seg_o
 
+class BlockAck:
+	LEN = 4 # 4 bytes/32 bits
+	__slots__ = "block",
+	def __init__(self, block: int):
+		self.block = block
+
+	def _check_index(self, index: int):
+		if index < 0:
+			raise IndexError(f"index can't be negative : {index}")
+		if index > self.LEN*8:
+			raise IndexError(f"index {index} is bigger than the block ack size {self.LEN*8} bits")
+
+	def set(self, index: int):
+		self._check_index(index)
+		self.block |= 1 << index
+
+	def get(self, index: int) -> bool:
+		self._check_index(index)
+		return (self.block & (1 << index))  != 0
+
+	def to_bytes(self) -> bytes:
+		return self.block.to_bytes(self.LEN, byteorder="big")
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'BlockAck':
+		if len(b)!=cls.LEN:
+			raise ValueError(f"expect {cls.LEN} bytes but got {len(b)}")
+		return cls(int.from_bytes(b, byteorder="big"))
 
 class SegmentAcknowledgementLowerPDU(LowerPDU):
 	__slots__ = "obo", "seq_zero", "block_ack"
 
-	def __init__(self, obo: bool, seq_zero: int, block_ack: int):
+	def __init__(self, obo: bool, seq_zero: int, block_ack: BlockAck):
 		self.obo = obo
 		self.seq = seq_zero
 		self.block_ack = block_ack
 
 	def to_bytes(self) -> bytes:
-		return bytes([0]) + make_seq_zero(self.obo, self.seq_zero, 0, 0)[0:2] + self.block_ack
+		return bytes([0]) + make_seq_zero(self.obo, self.seq_zero, 0, 0)[0:2] + self.block_ack.to_bytes()
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'SegmentAcknowledgementLowerPDU':
 		if b[0] != 0x00:
 			raise ValueError("PDU not a segment acknowledgement lower pdu")
 		seq_zero_obo = int.from_bytes(b[1:3], byteorder="big")
-		return cls(obo=(seq_zero_obo & 0x7000) == 0x7000, seq_zero=(seq_zero_obo >> 2) & 0x1FFF, block_ack=b[3:3 + 4])
-
+		block_ack = BlockAck.from_bytes(b[3:3 + 4])
+		return cls(obo=(seq_zero_obo & 0x7000) == 0x7000, seq_zero=(seq_zero_obo >> 2) & 0x1FFF, block_ack=block_ack)
 
 class SegmentAssembler:
 

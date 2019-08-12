@@ -16,8 +16,8 @@ MAC = NewType("MAC", bytes)
 NetworkID = NewType("NetworkID", int)
 
 
-def data_and_mic_bytes(v: Tuple[bytes, MIC]) -> bytes:
-	return v[0] + v[1].bytes_be
+def data_and_mic_bytes(b: bytes, m: MIC) -> bytes:
+	return b + m.bytes_be
 
 
 class InvalidMIC(Exception):
@@ -46,7 +46,7 @@ class NetworkNonce(Nonce):
 	STRUCT = struct.Struct("!BB3sHxxL")
 	__slots__ = 'ttl', 'ctl', 'seq', 'src', 'iv_index'
 
-	def __init__(self, ttl: TTL, ctl: bool, seq: SEQ, src: Address, iv_index: IVIndex):
+	def __init__(self, ttl: TTL, ctl: bool, seq: Seq, src: Address, iv_index: IVIndex):
 		super().__init__(NonceType.NETWORK)
 		self.ttl = ttl
 		self.ctl = ctl
@@ -63,7 +63,7 @@ class ApplicationNonce(Nonce):
 	STRUCT = struct.Struct("!BB3sHHL")
 	__slots__ = 'aszmic', 'seq', 'src', 'dst', 'iv_index'
 
-	def __init__(self, aszmic: bool, seq: SEQ, src: Address, dst: Address, iv_index: IVIndex):
+	def __init__(self, aszmic: bool, seq: Seq, src: Address, dst: Address, iv_index: IVIndex):
 		super().__init__(NonceType.APPLICATION)
 		self.aszmic = aszmic
 		self.seq = seq
@@ -80,7 +80,7 @@ class DeviceNonce(Nonce):
 	STRUCT = struct.Struct("!BB3sHHL")
 	__slots__ = 'aszmic', 'seq', 'src', 'dst', 'iv_index'
 
-	def __init__(self, aszmic: bool, seq: SEQ, src: Address, dst: Address, iv_index: IVIndex):
+	def __init__(self, aszmic: bool, seq: Seq, src: Address, dst: Address, iv_index: IVIndex):
 		super().__init__(NonceType.DEVICE)
 		self.aszmic = aszmic
 		self.seq = seq
@@ -97,7 +97,7 @@ class ProxyNonce(Nonce):
 	STRUCT = struct.Struct("!Bx3sHxxL")
 	__slots__ = 'seq', 'src', 'iv_index'
 
-	def __init__(self, seq: SEQ, src: Address, iv_index):
+	def __init__(self, seq: Seq, src: Address, iv_index):
 		super().__init__(NonceType.PROXY)
 		self.seq = seq
 		self.src = src
@@ -126,6 +126,9 @@ class Key:
 	def __repr__(self) -> str:
 		return self.__str__()
 
+	def __len__(self) -> int:
+		return len(self.key_bytes)
+
 	def __eq__(self, other: 'Key') -> bool:
 		return self.key_bytes == other.key_bytes
 
@@ -134,9 +137,9 @@ class Key:
 		return cls(os.urandom(cls.KEY_LEN))
 
 
-class Appkey(Key):
+class AppKey(Key):
 	@classmethod
-	def random(cls) -> 'Appkey':
+	def random(cls) -> 'AppKey':
 		return cast(cls, cls.random())
 
 
@@ -148,20 +151,39 @@ class PrivacyKey(Key):
 	pass
 
 
+class IdentityKey(Key):
+	pass
+
+
+class BeaconKey(Key):
+	pass
+
+
 class NetworkKey(Key):
 	@classmethod
 	def random(cls) -> 'NetworkKey':
 		return cast(cls, cls.random())
 
 	def nid_encryption_privacy(self) -> Tuple[NID, EncryptionKey, PrivacyKey]:
-		return k2(self, bytes([0x00]))
+		return k2(self, b'\x00')
 
 	def security_material(self) -> 'NetworkSecurityMaterial':
 		nid, encryption, privacy = self.nid_encryption_privacy()
-		return NetworkSecurityMaterial(self.network_id(), nid, self, encryption, privacy)
+		return NetworkSecurityMaterial(self.network_id(), nid, self, encryption, privacy, self.identity_key(),
+									   self.beacon_key())
 
 	def network_id(self) -> NetworkID:
 		return NetworkID(k3(self))
+
+	def identity_key(self) -> IdentityKey:
+		salt = s1("nkik")
+		p = b"id128\x01"
+		return IdentityKey(k1(salt, self, p))
+
+	def beacon_key(self) -> BeaconKey:
+		salt = s1("nkbk")
+		p = b"id128\x01"
+		return BeaconKey(k1(salt, self, p))
 
 
 class DeviceKey(Key):
@@ -276,12 +298,12 @@ class TransportSecurityMaterial(SecurityMaterial):
 
 
 class AppSecurityMaterial(TransportSecurityMaterial):
-	def __init__(self, key: Appkey, aid: AID):
+	def __init__(self, key: AppKey, aid: AID):
 		super().__init__(key)
 		self.aid = aid
 
 	@classmethod
-	def from_key(cls, key: Appkey):
+	def from_key(cls, key: AppKey):
 		return cls(key, AID(k4(key.key_bytes)))
 
 
@@ -302,15 +324,21 @@ class DeviceSecurityMaterial(TransportSecurityMaterial):
 
 
 class NetworkSecurityMaterial(SecurityMaterial):
-	__slots__ = "network_id", "nid", "net_key", "encryption_key", "privacy_key"
+	__slots__ = "network_id", "nid", "net_key", "encryption_key", "privacy_key", "identity_key", "beacon_key"
 
 	def __init__(self, network_id: NetworkID, nid: NID, net_key: NetworkKey, encryption_key: EncryptionKey,
-				 privacy_key: PrivacyKey):
+				 privacy_key: PrivacyKey, identity_key: IdentityKey, beacon_key: BeaconKey):
 		self.network_id = network_id
 		self.nid = nid
 		self.net_key = net_key
 		self.encryption_key = encryption_key
 		self.privacy_key = privacy_key
+		self.identity_key = identity_key
+		self.beacon_key = beacon_key
+
+	@classmethod
+	def from_key(cls, network_key: NetworkKey) -> 'NetworkSecurityMaterial':
+		return network_key.security_material()
 
 
 def aes_ecb_encrypt(key: Key, clear_text: bytes) -> bytes:
@@ -347,11 +375,11 @@ def k2(n: Key, p: bytes) -> Tuple[NID, EncryptionKey, PrivacyKey]:
 	return nid, EncryptionKey(t2), PrivacyKey(t3)
 
 
-def k3(n: bytes) -> int:
+def k3(n: Key) -> int:
 	if len(n) != 16:
 		ValueError(f"n should be 16 bytes long not {len(n)}")
 	salt = s1("smk3")
-	t = aes_cmac(Key(salt), n)
+	t = aes_cmac(Key(salt), n.key_bytes)
 	return int.from_bytes(aes_cmac(Key(t), b'id64\x01')[8:16], byteorder="big")
 
 
@@ -368,16 +396,97 @@ def id128(n: Key, s: str) -> bytes:
 	return k1(salt, n, b"id128\x01")
 
 
-class NetworkAppKeys:
+class KeyRefreshPhase(enum.IntEnum):
+	Normal = 0x00  # Normal operation
+	Phase1 = 0x01  # Key distribution
+	Phase2 = 0x02  # Use new keys
+	Phase3 = 0x03  # Revoke old keys
 
-	def __init__(self, net_sm: NetworkSecurityMaterial):
-		self.net_sm = net_sm
-		self.app_sms: List[AppSecurityMaterial] = list()
 
-	def get_aid(self, aid: AID) -> Generator[AppSecurityMaterial, None, None]:
-		for app_sm in self.app_sms:
-			if app_sm.aid == aid:
-				yield app_sm
+class KeyIndexSlot:
+	__slots__ = "index", "new", "old", "phase"
 
-	def add_app_security_material(self, app_sm: AppSecurityMaterial):
-		self.app_sms.append(app_sm)
+	def __init__(self, index: KeyIndex, old: SecurityMaterial, new: Optional[SecurityMaterial] = None,
+				 phase: Optional[KeyRefreshPhase] = KeyRefreshPhase.Normal):
+		self.index = index
+		self.new = new
+		self.old = old
+		self.phase = phase
+
+	def tx_sm(self) -> SecurityMaterial:
+		if self.phase == KeyRefreshPhase.Phase2:
+			return self.new
+		else:
+			return self.old
+
+	def rx_sms(self) -> Tuple[SecurityMaterial, Optional[SecurityMaterial]]:
+		if self.phase == KeyRefreshPhase.Normal:
+			return self.old, None
+		elif self.phase == KeyRefreshPhase.Phase1:
+			return self.old, self.new
+		elif self.phase == KeyRefreshPhase.Phase2:
+			return self.old, self.new
+		raise NotImplementedError("unhandled key phases")
+
+	def revoke(self):
+		if self.phase != KeyRefreshPhase.Phase2:
+			raise RuntimeError(f"can only revoke from phase 2 not {self.phase}")
+		self.old = self.new
+		self.new = None
+		self.phase = KeyRefreshPhase.Normal
+
+
+class AppKeyIndexSlot(KeyIndexSlot):
+	def __init__(self, index: KeyIndex, old: AppSecurityMaterial, new: Optional[AppSecurityMaterial] = None,
+				 phase: Optional[KeyRefreshPhase] = KeyRefreshPhase.Normal):
+		super().__init__(index, old, new, phase)
+
+
+class NetKeyIndexSlot(KeyIndexSlot):
+	def __init__(self, index: KeyIndex, old: NetworkSecurityMaterial, new: Optional[NetworkSecurityMaterial] = None,
+				 phase: Optional[KeyRefreshPhase] = KeyRefreshPhase.Normal):
+		super().__init__(index, old, new, phase)
+
+
+class GlobalContext:
+	__slots__ = "apps", "nets", "iv_index"
+
+	def __init__(self, iv_index: IVIndex, primary_net: NetKeyIndexSlot, device_sm: DeviceSecurityMaterial):
+		if primary_net.index != 0:
+			raise ValueError(f"primary net key has to have index 0x0000 not 0x{primary_net.index:04X}")
+		self.iv_index = iv_index
+		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
+		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
+
+	def primary_net(self):
+		return self.nets[NetKeyIndex(0)]
+
+	def add_app(self, slot: AppKeyIndexSlot):
+		if slot.index in self.apps:
+			raise ValueError(f"app key index {slot.index} already exists")
+		self.apps[slot.index] = slot
+
+	def add_net(self, slot: NetKeyIndexSlot):
+		if slot.index in self.nets:
+			raise ValueError(f"net key index {slot.index} already exists")
+		self.nets[slot.index] = slot
+
+	def get_app(self, index: AppKeyIndex) -> AppKeyIndexSlot:
+		return self.apps[index]
+
+	def get_net(self, index: NetKeyIndex) -> NetKeyIndexSlot:
+		return self.nets[index]
+
+	def get_device(self) -> DeviceSecurityMaterial:
+		return self.device_sm
+
+
+class LocalContext:
+	__slots__ = "seq", "device_sm"
+
+	def __init__(self, seq: Seq, device_sm: DeviceSecurityMaterial):
+		self.seq = seq
+		self.device_sm = device_sm
+
+	def seq_inc(self):
+		self.seq += 1

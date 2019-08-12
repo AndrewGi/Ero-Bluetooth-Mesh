@@ -1,5 +1,5 @@
 from .mesh import *
-from . import transport, crypto
+from . import crypto
 import struct
 
 
@@ -18,10 +18,8 @@ class NetworkSecurityMaterials:
 		self.encryption_key = encryption_key
 
 	def ivi(self) -> bool:
-		return self.iv_index % 2 == 1
+		return self.iv_index.ivi()
 
-class PDUContext:
-	def __init__(self):
 
 class PDU:
 	__slots__ = ("ivi", "nid", "ctl", "ttl", "seq", "src", "dst", "transport_pdu")
@@ -77,11 +75,11 @@ class PDU:
 			struct.pack("!B3sH", (self.ctl << 7 | self.ttl), seq_bytes(self.seq), self.src), pecb[0:5])
 
 	@classmethod
-	def deobfuscate(cls, b: bytes, privacy_key: crypto.PrivacyKey, iv_index: IVIndex) -> Tuple[bool, TTL, SEQ, Address]:
+	def deobfuscate(cls, b: bytes, privacy_key: crypto.PrivacyKey, iv_index: IVIndex) -> Tuple[bool, TTL, Seq, Address]:
 		privacy_random = b[8:8 + 7]
 		pecb = cls.pecb(privacy_key, iv_index, privacy_random)
 		ctl_ttl, seq, src = struct.unpack("!B3sH", xor_bytes(pecb, b[0:8]))
-		return (ctl_ttl >> 7) == 1, TTL(ctl_ttl % 0x7F), SEQ(int.from_bytes(seq, byteorder="big")), Address(src)
+		return (ctl_ttl >> 7) == 1, TTL(ctl_ttl % 0x7F), Seq(int.from_bytes(seq, byteorder="big")), Address(src)
 
 	@staticmethod
 	def ivi_nid(b: bytes) -> Tuple[bool, NID]:

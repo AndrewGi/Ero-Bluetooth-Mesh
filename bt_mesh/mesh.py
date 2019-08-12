@@ -6,17 +6,17 @@ from . import crypto
 
 KeyIndex = NewType("NetIndex", int)
 NetKeyIndex = NewType("NetKeyIndex", KeyIndex)
-AppkeyIndex = NewType("AppKeyIndex", KeyIndex)
+AppKeyIndex = NewType("AppKeyIndex", KeyIndex)
 
 CompanyID = NewType("CompanyID", int)
 SIGCompanyID = CompanyID(0)
 
 NID = NewType("NID", int)
 AID = NewType("AID", int)
-SEQ = NewType("SEQ", int)
+Seq = NewType("Seq", int)
 
 
-def seq_bytes(seq: SEQ):
+def seq_bytes(seq: Seq):
 	return seq.to_bytes(3, byteorder="big")
 
 
@@ -39,6 +39,9 @@ class MIC:
 	def mic_len(self) -> int:
 		return len(self.bytes_be) * 8
 
+	def __len__(self) -> int:
+		return len(self.bytes_be)
+
 
 class NonceType(IntEnum):
 	NETWORK = 0x00
@@ -57,7 +60,6 @@ class TTL(int):
 			super().__init__(ttl)
 		else:
 			raise ValueError(f"ttl too high: {ttl}")
-
 
 class Address(int):
 	MAX_ADDRESS = 0xFFFF

@@ -1,7 +1,6 @@
 import struct
 from uuid import UUID
 import datetime
-from . import ble
 import enum
 
 
