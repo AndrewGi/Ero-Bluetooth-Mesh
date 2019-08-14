@@ -3,6 +3,8 @@ Built in bearer is using a slightly modifier [Bleson](https://github.com/TheCell
 
 See better_mesh_ctl.py for an example.
 
+### ALWAYS LOOK FOR HELP/CONTRIBUTERS ###
+
 ## Features Supported:
 - Hardware Agnostic Bearer Layer 
 - Network Layer
