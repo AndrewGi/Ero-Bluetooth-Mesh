@@ -7,24 +7,10 @@ def xor_bytes(b1: bytes, b2: bytes) -> bytes:
 	return bytes(a ^ b for a, b in zip(b1, b2))
 
 
-class NetworkSecurityMaterials:
-	__slots__ = "nid", "iv_index", "privacy_key", "encryption_key", "network_nonce"
-
-	def __init__(self, nid: NID, ivi_index: IVIndex, privacy_key: crypto.PrivacyKey,
-				 encryption_key: crypto.EncryptionKey):
-		self.nid = nid
-		self.iv_index = ivi_index
-		self.privacy_key = privacy_key
-		self.encryption_key = encryption_key
-
-	def ivi(self) -> bool:
-		return self.iv_index.ivi()
-
-
 class PDU:
 	__slots__ = ("ivi", "nid", "ctl", "ttl", "seq", "src", "dst", "transport_pdu")
 
-	def __init__(self, ivi: bool, nid: NID, ctl: bool, ttl: TTL, seq: int, src: Address, dst: Address,
+	def __init__(self, ivi: bool, nid: NID, ctl: bool, ttl: TTL, seq: int, src: UnicastAddress, dst: Address,
 				 transport_pdu: bytes):
 		self.ivi = ivi
 		self.nid = nid
@@ -75,27 +61,28 @@ class PDU:
 			struct.pack("!B3sH", (self.ctl << 7 | self.ttl), seq_bytes(self.seq), self.src), pecb[0:5])
 
 	@classmethod
-	def deobfuscate(cls, b: bytes, privacy_key: crypto.PrivacyKey, iv_index: IVIndex) -> Tuple[bool, TTL, Seq, Address]:
+	def deobfuscate(cls, b: bytes, privacy_key: crypto.PrivacyKey, iv_index: IVIndex) -> Tuple[
+		bool, TTL, Seq, UnicastAddress]:
 		privacy_random = b[8:8 + 7]
 		pecb = cls.pecb(privacy_key, iv_index, privacy_random)
 		ctl_ttl, seq, src = struct.unpack("!B3sH", xor_bytes(pecb, b[0:8]))
-		return (ctl_ttl >> 7) == 1, TTL(ctl_ttl % 0x7F), Seq(int.from_bytes(seq, byteorder="big")), Address(src)
+		return (ctl_ttl >> 7) == 1, TTL(ctl_ttl % 0x7F), Seq(int.from_bytes(seq, byteorder="big")), UnicastAddress(src)
 
 	@staticmethod
 	def ivi_nid(b: bytes) -> Tuple[bool, NID]:
 		return (b[0] & 0x80 != 0), NID(b[0] & 0x7F)
 
 	@classmethod
-	def from_bytes(cls, b: bytes, sec_mat: NetworkSecurityMaterials) -> 'PDU':
+	def from_bytes(cls, b: bytes, sec_mat: crypto.NetworkSecurityMaterial, iv_index: IVIndex) -> 'PDU':
 		ivi, nid = cls.ivi_nid(b)
-		ctl, ttl, seq, src = cls.deobfuscate(b[1:], sec_mat.privacy_key, sec_mat.iv_index)
-		net_mic_len = 8 if ctl else 4 # 64 bits if CTL else 32 bits
-		net_mic = b[-net_mic_len:]
+		if ivi != iv_index.ivi():
+			raise ValueError("message ivi does not match iv_index ivi")
+		ctl, ttl, seq, src = cls.deobfuscate(b[1:], sec_mat.privacy_key, iv_index)
+		net_mic_len = 8 if ctl else 4  # 64 bits if CTL else 32 bits
+		net_mic = MIC(b[-net_mic_len:])
 		encrypted_transport = b[7:-net_mic_len]
-		network_nonce = crypto.NetworkNonce(ttl, ctl, seq, src, sec_mat.iv_index)
-		dst_transport_pdu = cls.decrypt(sec_mat.encryption_key, network_nonce, encrypted_transport, net_mic_len)
+		network_nonce = crypto.NetworkNonce(ttl, ctl, seq, src, iv_index)
+		dst_transport_pdu = cls.decrypt(sec_mat.encryption_key, network_nonce, encrypted_transport, net_mic)
 		dst = Address(dst_transport_pdu[:2])
 		transport_pdu = dst_transport_pdu[2:]
 		return cls(ivi, nid, ctl, ttl, seq, src, dst, transport_pdu)
-
-

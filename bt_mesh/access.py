@@ -4,6 +4,7 @@ import struct
 
 ModelID = NewType("ModelID", int)
 
+ACK_TIMEOUT = 30 # 30 seconds is minimum act timeout
 
 class Opcode:
 	__slots__ = ("opcode", "company_id")

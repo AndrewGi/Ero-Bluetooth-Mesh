@@ -1,7 +1,10 @@
 import enum
 import os
 import struct
+from abc import ABC
+
 from .mesh import *
+from .serialize import Serializable
 from cryptography.hazmat.primitives import cmac
 from cryptography.hazmat.primitives.ciphers import algorithms, Cipher, CipherContext
 from cryptography.hazmat.primitives.ciphers.aead import AESCCM
@@ -35,7 +38,7 @@ class NonceType(enum.IntEnum):
 class Nonce:
 	__slots__ = 'nonce_type',
 
-	def __init__(self, nonce_type: NonceType):
+	def __init__(self, nonce_type: Optional[NonceType]):
 		self.nonce_type = nonce_type
 
 	def as_be_bytes(self) -> bytes:
@@ -111,17 +114,24 @@ class Key:
 	KEY_LEN = 16
 	__slots__ = 'key_bytes',
 
-	def __init__(self, key_bytes: bytes):
+	def __init__(self, key_bytes: bytearray):
 		if len(key_bytes) != self.KEY_LEN:
 			raise ValueError(f"key len ({len(key_bytes)} not {self.KEY_LEN} bytes long")
 		self.key_bytes = key_bytes
 
 	@classmethod
 	def from_int(cls, i: int):
-		return cls(i.to_bytes(cls.KEY_LEN, byteorder="big"))
+		return cls(bytearray(i.to_bytes(cls.KEY_LEN, byteorder="big")))
+
+	def hex(self) -> str:
+		return self.key_bytes.hex()
+
+	@classmethod
+	def from_str(cls, s: str) -> 'Key':
+		return cls(bytearray.fromhex(s))
 
 	def __str__(self) -> str:
-		return self.key_bytes.hex()
+		return self.hex()
 
 	def __repr__(self) -> str:
 		return self.__str__()
@@ -157,6 +167,26 @@ class IdentityKey(Key):
 
 class BeaconKey(Key):
 	pass
+
+class SessionNonce(Nonce):
+	__slots__ = "nonce",
+	def __init__(self, nonce: bytes):
+		if len(nonce) != 13:
+			raise ValueError(f"nonce should be 13 bytes not {len(nonce)}")
+		super().__init__(None)
+		self.nonce = nonce
+
+	def to_bytes(self) -> bytes:
+		return self.nonce
+
+	@classmethod
+	def from_secret(cls, secret: 'ECDHSharedSecret', provisioning_salt: ProvisioningSalt) -> 'SessionNonce':
+		return cls(k1(provisioning_salt, secret, b"prsn")[:13])
+
+class SessionKey(Key):
+	@classmethod
+	def from_secret(cls, secret: 'ECDHSharedSecret', provisioning_salt: ProvisioningSalt) -> 'SessionKey':
+		return cls(k1(provisioning_salt, secret, b"prsk"))
 
 
 class NetworkKey(Key):
@@ -269,11 +299,11 @@ def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_da
 		raise InvalidMIC()
 
 
-class SecurityMaterial:
+class SecurityMaterial(Serializable, ABC):
 	pass
 
 
-class TransportSecurityMaterial(SecurityMaterial):
+class TransportSecurityMaterial(SecurityMaterial, ABC):
 	__slots__ = "key"
 
 	def __init__(self, key: crypto.Key):
@@ -297,7 +327,19 @@ class TransportSecurityMaterial(SecurityMaterial):
 		return self.aes_ccm_decrypt(nonce, data, mic, virtual_address.uuid.bytes if virtual_address else None)
 
 
+
 class AppSecurityMaterial(TransportSecurityMaterial):
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"key": self.key,
+			"aid": self.aid
+		}
+
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]):
+		return cls(d["key"], d["aid"])
+
 	def __init__(self, key: AppKey, aid: AID):
 		super().__init__(key)
 		self.aid = aid
@@ -308,6 +350,15 @@ class AppSecurityMaterial(TransportSecurityMaterial):
 
 
 class DeviceSecurityMaterial(TransportSecurityMaterial):
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"key": self.key
+		}
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]):
+		pass
+
 	def __init__(self, key: DeviceKey):
 		super().__init__(key)
 
@@ -437,15 +488,42 @@ class KeyIndexSlot:
 
 
 class AppKeyIndexSlot(KeyIndexSlot):
-	def __init__(self, index: KeyIndex, old: AppSecurityMaterial, new: Optional[AppSecurityMaterial] = None,
+	def __init__(self, index: AppKeyIndex, old: AppSecurityMaterial, new: Optional[AppSecurityMaterial] = None,
 				 phase: Optional[KeyRefreshPhase] = KeyRefreshPhase.Normal):
 		super().__init__(index, old, new, phase)
 
+	def tx_sm(self) -> AppSecurityMaterial:
+		return cast(AppSecurityMaterial, super().tx_sm())
+
+	def rx_sms(self) -> Tuple[AppSecurityMaterial, Optional[AppSecurityMaterial]]:
+		return cast(Tuple[AppSecurityMaterial, Optional[AppSecurityMaterial]], super().rx_sms())
+
+	def rx_by_aid(self, aid: AID) -> Generator[AppSecurityMaterial, None, None]:
+		old, new = self.rx_sms()
+		if old.aid == aid:
+			yield old
+		if new and new.aid == aid:
+			yield new
 
 class NetKeyIndexSlot(KeyIndexSlot):
-	def __init__(self, index: KeyIndex, old: NetworkSecurityMaterial, new: Optional[NetworkSecurityMaterial] = None,
+	def __init__(self, index: NetKeyIndex, old: NetworkSecurityMaterial, new: Optional[NetworkSecurityMaterial] = None,
 				 phase: Optional[KeyRefreshPhase] = KeyRefreshPhase.Normal):
 		super().__init__(index, old, new, phase)
+
+	def tx_sm(self) -> NetworkSecurityMaterial:
+		return cast(NetworkSecurityMaterial, super().tx_sm())
+
+	def rx_sms(self) -> Tuple[NetKeyIndex, NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]]:
+		return self.index, cast(Tuple[NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]], super().rx_sms())
+
+	def rx_by_nid(self, nid: NID) -> Generator[NetworkSecurityMaterial, None, None]:
+		old, new = self.rx_sms()
+		if old.nid == nid:
+			yield old
+		if new and new.nid == nid:
+			yield new
+
+
 
 
 class GlobalContext:
@@ -457,6 +535,10 @@ class GlobalContext:
 		self.iv_index = iv_index
 		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
 		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
+
+	def get_iv_index(self, ivi: Optional[bool] = None):
+		# TODO: get iv_index by ivi
+		return self.iv_index
 
 	def primary_net(self):
 		return self.nets[NetKeyIndex(0)]
@@ -471,14 +553,26 @@ class GlobalContext:
 			raise ValueError(f"net key index {slot.index} already exists")
 		self.nets[slot.index] = slot
 
+	def to_dict(self) -> Dict[str, Any]:
+
+
+
+	def get_nid_rx_keys(self, nid: NID) -> Generator[[NetKeyIndex, NetworkSecurityMaterial], None, None]:
+		for slot in self.nets.values():
+			for rx_key in slot.rx_by_nid(nid):
+				yield slot.index, rx_key
+
+	def get_aid_rx_keys(self, aid: AID) -> Generator[[AppKeyIndex, AppSecurityMaterial], None, None]:
+		for slot in self.apps.values():
+			for rx_key in slot.rx_by_aid(aid):
+				yield slot.index, rx_key
+
 	def get_app(self, index: AppKeyIndex) -> AppKeyIndexSlot:
 		return self.apps[index]
 
 	def get_net(self, index: NetKeyIndex) -> NetKeyIndexSlot:
 		return self.nets[index]
 
-	def get_device(self) -> DeviceSecurityMaterial:
-		return self.device_sm
 
 
 class LocalContext:

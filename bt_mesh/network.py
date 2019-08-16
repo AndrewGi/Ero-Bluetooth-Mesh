@@ -1,63 +1,57 @@
-import datetime
-
-from . import beacon, prov, net
-import queue
-import threading
 from typing import *
+from .mesh import *
+from . import crypto
+
+class RemoteDevice:
+	__slots__ = "primary_address", "element_count"
+
+	def __init__(self, primary_address: UnicastAddress, element_count: int):
+		self.primary_address = primary_address
+		self.element_count = element_count
+
+	def primary_element_address(self) -> UnicastAddress:
+		return self.primary_address
+
+	def last_element_address(self) -> UnicastAddress:
+		return UnicastAddress(self.primary_address + self.element_count)
+
+	def has_unicast_address(self, address: UnicastAddress) -> bool:
+		return self.primary_element_address() <= address < self.last_element_address()
+
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"primary_address": self.primary_address,
+			"element_count": self.element_count
+		}
+
+	@classmethod
+	def from_dict(cls, d: Dict) -> 'RemoteDevice':
+		return cls(primary_address=d["primary_address"], element_count=d["element_count"])
+
+
 class Network:
-	def __init__(self):
-		self.incoming_net_pdus = queue.Queue()
-		self.handle_net_pdu_thread = threading.Thread(target=self._handle_net_pdus)
-		self.handle_net_pdu_thread.start()
-		self.incoming_beacons = queue.Queue()
-		self.handle_beacon_thread = threading.Thread(target=self._handle_beacons)
-		self.bearers = list() # type: List[bearer.Bearer]
-		self.unprovisioned_devices = list() # type: List[beacon.UnprovisionedBeacon]
-		self.provisioner = prov.Provisioner(None)
+	__slots__ = "global_context", "remote_devices", "end_address"
 
-	def _handle_beacons(self):
-		while True:
-			item = self.incoming_beacons.get()
-			if item is None:
-				break
-			self.provisioner.handle_beacon(item)
-			self.incoming_beacons.task_done()
+	def __init__(self, global_context: crypto.GlobalContext, remote_devices: Dict[UnicastAddress, RemoteDevice], end_address: UnicastAddress):
+		self.remote_devices: Dict[UnicastAddress, RemoteDevice] = remote_devices
+		self.global_context: crypto.GlobalContext = global_context
+		self.end_address = end_address
 
 
+	def get_by_address(self, address: UnicastAddress):
+		for device in self.remote_devices.values():
+			if device.has_unicast_address(address):
+				return device
 
-	def _handle_net_pdus(self):
-		while True:
-			item = self.incoming_net_pdus.get()
-			if item is None:
-				break
-			self._handle_raw_net_pdu(item)
-			self.incoming_net_pdus.task_done()
+	def allocate_device(self, element_count: int) -> RemoteDevice:
+		start_address = self.end_address
+		self.end_address = UnicastAddress(self.end_address+element_count)
+		device = RemoteDevice(start_address, element_count)
+		self.remote_devices[start_address] = device
+		return device
 
-	def _handle_net_raw_pdu(self, raw_net_pdu: bytes):
-		net.PDU.from_bytes(raw_net_pdu)
-		pass
-
-	def _send_raw_network_pdu(self, raw_network_pdu: bytes):
-		for b in self.bearers:
-			b.send_network_pdu(raw_network_pdu)
-
-	def add_bearer(self, bearer):
-		bearer.network = self
-		self.bearers.append(bearer)
-
-	def handle_unprovisioned_beacon(self, in_beacon: beacon.UnprovisionedBeacon):
-		if self.provisioner:
-			self.provisioner.handle_beacon(in_beacon)
-
-	def handle_secure_beacon(self, in_beacon: beacon.SecureBeacon):
-		pass
-
-	def handle_beacon(self, in_beacon: beacon.Beacon):
-		if in_beacon.beacon_type == beacon.BeaconType.UnprovisionedDevice:
-			self.handle_unprovisioned_beacon(in_beacon)
-		elif in_beacon.beacon_type == beacon.BeaconType.SecureNetwork:
-			self.handle_secure_beacon(in_beacon)
-		raise NotImplementedError("unrecognized beacon type")
-
-	def handle_raw_network_pdu(self, network_pdu: bytes):
-		self.incoming_net_pdus.put(network_pdu)
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"global_context": self.global_context.to_dict(),
+			"remote_devices": {device.primary_address: device.to_dict() for device in self.remote_devices.values()}
+		}

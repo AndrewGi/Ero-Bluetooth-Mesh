@@ -1,7 +1,6 @@
 from typing import *
 from enum import IntEnum
 from uuid import UUID
-
 from . import crypto
 
 KeyIndex = NewType("NetIndex", int)
@@ -14,20 +13,26 @@ SIGCompanyID = CompanyID(0)
 NID = NewType("NID", int)
 AID = NewType("AID", int)
 Seq = NewType("Seq", int)
-
+SeqAuth = NewType("SeqAuth", int)
+SeqZero = NewType("SeqZero", int)
 
 def seq_bytes(seq: Seq):
 	return seq.to_bytes(3, byteorder="big")
 
 
-class IVIndex:
-	__slots__ = "index",
+class IVIndex(int):
+	IV_MAX = 2 ** 32 - 1
 
 	def __init__(self, index: int):
-		self.index = index
+		super().__init__(index)
 
 	def ivi(self) -> bool:
-		return self.index % 2 == 1
+		return self % 2 == 1
+
+	def next_iv(self) -> 'IVIndex':
+		if self == self.IV_MAX:
+			raise OverflowError("iv index at max")
+		return IVIndex(self + 1)
 
 
 class MIC:
@@ -61,6 +66,7 @@ class TTL(int):
 		else:
 			raise ValueError(f"ttl too high: {ttl}")
 
+
 class Address(int):
 	MAX_ADDRESS = 0xFFFF
 
@@ -85,6 +91,7 @@ class UnicastAddress(Address):
 
 
 class VirtualAddress(Address):
+	__slots__ = "uuid",
 	SALT = crypto.s1("vtad")
 
 	def addr(self) -> Address:
@@ -93,6 +100,7 @@ class VirtualAddress(Address):
 	def __init__(self, uuid: UUID):
 		self.uuid = uuid
 		super().__init__(self.addr())
+
 
 
 class SensorDescriptor:

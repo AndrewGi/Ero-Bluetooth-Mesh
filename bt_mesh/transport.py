@@ -1,8 +1,10 @@
 import struct
+import time
 
 from .mesh import *
 from . import crypto
 import enum
+import threading
 
 
 class CTLOpcode(enum.IntEnum):
@@ -42,7 +44,6 @@ class UpperEncryptedAccessPDU:
 		mic = MIC(b[mic_size:])
 		return cls(aid, b[:mic_size], mic)
 
-
 	@overload
 	def decrypt(self, nonce: crypto.DeviceNonce, sm: crypto.DeviceSecurityMaterial) -> 'UpperAccessPDU':
 		...
@@ -54,18 +55,35 @@ class UpperEncryptedAccessPDU:
 
 	def decrypt(self, nonce: crypto.Nonce, sm: crypto.TransportSecurityMaterial,
 				virtual_address: Optional[VirtualAddress] = None) -> 'UpperAccessPDU':
-		return UpperAccessPDU(sm.transport_decrypt(nonce, self.data, self.mic, virtual_address), self.mic.mic_len() == 64)
+		return UpperAccessPDU(sm.transport_decrypt(nonce, self.data, self.mic, virtual_address),
+							  self.mic.mic_len() == 64)
 
 	def should_segment(self) -> bool:
 		return len(self) <= UnsegmentedAccessLowerPDU.MAX_UPPER_LEN
 
 	def unsegmented(self) -> 'UnsegmentedAccessLowerPDU':
 		if self.should_segment():
-			raise OverflowError(f"max unsegmented size is {UnsegmentedAccessLowerPDU.MAX_UPPER_LEN} but message size is {len(self)}")
+			raise OverflowError(
+				f"max unsegmented size is {UnsegmentedAccessLowerPDU.MAX_UPPER_LEN} but message size is {len(self)}")
 		return UnsegmentedAccessLowerPDU(self.aid is not None, self.aid, crypto.data_and_mic_bytes(self.data, self.mic))
 
+	def seg_n(self) -> int:
+		seg_size = SegmentedAccessLowerPDU.SEG_LEN
+		return (len(self) // seg_size) + ((len(self) % seg_size) != 0)
+
 	def segmented(self, start_seq: Seq) -> Generator['SegmentedAccessLowerPDU', None, None]:
-		
+		seq_zero = start_seq
+		seg_size = SegmentedAccessLowerPDU.SEG_LEN
+		seg_n = self.seg_n()
+		seg_o = 0
+		total_data = self.to_bytes()
+		big_mic = self.mic.mic_len() == 64
+		while seg_o < seg_n:
+			data = total_data[seg_o * seg_size:(seg_o + 1) * seg_size]
+			yield SegmentedAccessLowerPDU(self.akf(), big_mic, self.aid, seq_zero, seg_o, seg_n, data)
+		yield SegmentedAccessLowerPDU(self.akf(), big_mic, self.aid, seq_zero, seg_o, seg_n,
+									  total_data[seg_o * seg_size:])
+
 
 class UpperAccessPDU:
 	__slots__ = "payload", "big_mic"
@@ -122,7 +140,7 @@ class UnsegmentedAccessLowerPDU(LowerPDU):
 	MAX_UPPER_LEN = 15
 	__slots__ = "afk", "aid", "upper_pdu"
 
-	def __init__(self, afk: bool, aid: AID, upper_pdu: bytes):
+	def __init__(self, afk: bool, aid: AID, upper_pdu: UpperEncryptedAccessPDU):
 		if len(upper_pdu) > self.MAX_UPPER_LEN:
 			raise ValueError(f"upper_pdu max {self.MAX_UPPER_LEN} bytes but given {len(upper_pdu)}")
 		self.afk = afk
@@ -130,13 +148,14 @@ class UnsegmentedAccessLowerPDU(LowerPDU):
 		self.upper_pdu = upper_pdu
 
 	def to_bytes(self) -> bytes:
-		return bytes([(self.afk << 6) | self.aid]) + self.upper_pdu
+		return bytes([(self.afk << 6) | self.aid]) + self.upper_pdu.to_bytes()
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'UnsegmentedAccessLowerPDU':
 		afk = b[0] & 0x4 == 0x4
 		aid = AID(b[0] & 0x3F)
-		upper_pdu = b[1:]
+		# Unsegmented messages have a small MIC
+		upper_pdu = UpperEncryptedAccessPDU.from_bytes(b[1:], False, aid)
 		return cls(afk, aid, upper_pdu)
 
 
@@ -167,22 +186,31 @@ class SegmentedAccessLowerPDU(LowerPDU):
 		return cls(afk, szmic, aid, seq_zero, seg_o, seg_n, segment)
 
 
+control_pdus: Dict[CTLOpcode, 'UnsegmentedControlLowerPDU'] = dict()
+
+
 class UnsegmentedControlLowerPDU(LowerPDU):
 	MAX_PARAMETERS_LEN = 88
-	__slots__ = "opcode", "parameters"
+	__slots__ = "opcode"
 
-	def __init__(self, opcode: CTLOpcode, parameters: bytes):
-		if len(parameters) > self.MAX_PARAMETERS_LEN:
-			raise ValueError(f"parameters too long: {len(parameters)}>{self.MAX_PARAMETERS_LEN}")
-		self.parameters = parameters
-		self.opcode = opcode
+	def __init__(self, opcode: CTLOpcode): \
+			self.opcode = opcode
 
 	def to_bytes(self) -> bytes:
-		return bytes([self.opcode & 0x3f]) + self.parameters
+		return bytes([self.opcode & 0x3f]) + self.control_to_bytes()
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'UnsegmentedControlLowerPDU':
-		return cls(opcode=CTLOpcode(b[0] & 0x3f), parameters=b[1:])
+		opcode = CTLOpcode(b[0] & 0x3F)
+		parameters = b[1:]
+		return control_pdus[opcode].control_from_bytes(parameters)
+
+	def control_to_bytes(self) -> bytes:
+		raise NotImplementedError()
+
+	@classmethod
+	def control_from_bytes(cls, b: bytes):
+		raise NotImplementedError()
 
 
 class SegmentedControlLowerPDU(LowerPDU):
@@ -210,17 +238,23 @@ class SegmentedControlLowerPDU(LowerPDU):
 	def is_end(self) -> bool:
 		return self.seg_n == self.seg_o
 
+
+LowerSegmentedPDU = Union[SegmentedAccessLowerPDU, SegmentedControlLowerPDU]
+
+
 class BlockAck:
-	LEN = 4 # 4 bytes/32 bits
-	__slots__ = "block",
-	def __init__(self, block: int):
+	LEN = 4  # 4 bytes/32 bits
+	__slots__ = "block", "seg_n"
+
+	def __init__(self, block: int, seg_n: int):
 		self.block = block
+		self.seg_n = seg_n
 
 	def _check_index(self, index: int):
 		if index < 0:
 			raise IndexError(f"index can't be negative : {index}")
-		if index > self.LEN*8:
-			raise IndexError(f"index {index} is bigger than the block ack size {self.LEN*8} bits")
+		if index >= self.seg_n:
+			raise IndexError(f"index {index} is bigger than the block ack size {self.seg_n} bits")
 
 	def set(self, index: int):
 		self._check_index(index)
@@ -228,39 +262,57 @@ class BlockAck:
 
 	def get(self, index: int) -> bool:
 		self._check_index(index)
-		return (self.block & (1 << index))  != 0
+		return (self.block & (1 << index)) != 0
 
 	def to_bytes(self) -> bytes:
 		return self.block.to_bytes(self.LEN, byteorder="big")
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'BlockAck':
-		if len(b)!=cls.LEN:
+		if len(b) != cls.LEN:
 			raise ValueError(f"expect {cls.LEN} bytes but got {len(b)}")
-		return cls(int.from_bytes(b, byteorder="big"))
+		return cls(int.from_bytes(b, byteorder="big"), cls.LEN * 8)
 
-class SegmentAcknowledgementLowerPDU(LowerPDU):
+	def get_unacked_pdu_indexes(self) -> Generator[int, None, None]:
+		for i in range(self.seg_n):
+			if not self.get(i):
+				yield i
+
+	def get_acked_pdu_indexes(self) -> Generator[int, None, None]:
+		for i in range(self.seg_n):
+			if self.get(i):
+				yield i
+
+
+class SegmentAcknowledgementPDU(UnsegmentedControlLowerPDU):
 	__slots__ = "obo", "seq_zero", "block_ack"
 
 	def __init__(self, obo: bool, seq_zero: int, block_ack: BlockAck):
+		super().__init__(CTLOpcode.ACK)
 		self.obo = obo
 		self.seq = seq_zero
 		self.block_ack = block_ack
 
-	def to_bytes(self) -> bytes:
-		return bytes([0]) + make_seq_zero(self.obo, self.seq_zero, 0, 0)[0:2] + self.block_ack.to_bytes()
+	def control_to_bytes(self) -> bytes:
+		return make_seq_zero(self.obo, self.seq_zero, 0, 0)[0:2] + self.block_ack.to_bytes()
 
 	@classmethod
-	def from_bytes(cls, b: bytes) -> 'SegmentAcknowledgementLowerPDU':
-		if b[0] != 0x00:
-			raise ValueError("PDU not a segment acknowledgement lower pdu")
-		seq_zero_obo = int.from_bytes(b[1:3], byteorder="big")
-		block_ack = BlockAck.from_bytes(b[3:3 + 4])
+	def control_from_bytes(cls, b: bytes) -> 'SegmentAcknowledgementPDU':
+		seq_zero_obo = int.from_bytes(b[:2], byteorder="big")
+		block_ack = BlockAck.from_bytes(b[2:2 + 4])
 		return cls(obo=(seq_zero_obo & 0x7000) == 0x7000, seq_zero=(seq_zero_obo >> 2) & 0x1FFF, block_ack=block_ack)
 
-class SegmentAssembler:
 
-	def __init__(self, first_pdu: LowerPDU):
+class SegmentSrc:
+	__slots__ = "src", "seq_auth"
+
+	def __init__(self, src: UnicastAddress, seq_auth: SeqAuth):
+		self.src = src
+		self.seq_auth = seq_auth
+
+
+class SegmentAssembler:
+	def __init__(self, src: UnicastAddress, first_pdu: LowerPDU):
 		if isinstance(first_pdu, SegmentedControlLowerPDU):
 			self.ctl = True
 		elif isinstance(first_pdu, SegmentedAccessLowerPDU):
@@ -268,14 +320,21 @@ class SegmentAssembler:
 		else:
 			raise ValueError("unexpected lower pdu type")
 		pdu = self.verify(first_pdu)
+		self.src = src
 		self.szmic = pdu.szmic
+		self.seq_zero = pdu.seq_zero
 		self.seg_n = first_pdu.seg_n
 		self.seg_mask = (2 ** self.seg_n) - 1
-		self.segs_needed = self.seg_mask
+		self.block_ack = BlockAck(self.seg_mask, self.seg_n)
 		self.seg_len = pdu.SEG_LEN
 		self.known_len = 0
 		self.max_len = self.seg_n * self.seg_len
 		self.data = bytearray(self.max_len)
+		self.obo = False
+
+	@staticmethod
+	def timer_length(ttl: int) -> int:
+		return 200 + ttl * 50
 
 	def verify(self, pdu: LowerPDU) -> Union[SegmentedAccessLowerPDU, SegmentedControlLowerPDU]:
 		if self.ctl and isinstance(pdu, SegmentedControlLowerPDU):
@@ -285,7 +344,8 @@ class SegmentAssembler:
 		else:
 			raise ValueError(f"unexpected lower pdu type ctl:{self.ctl} pdu:{pdu}")
 
-	def insert_segment(self, seg_i: int, position: int, data: bytes):
+	def insert_segment(self, seg_i: int, data: bytes):
+		position = self.seg_n * self.seg_len
 		if position + len(data) > self.max_len:
 			raise ValueError("data out of bounds")
 		if seg_i != self.seg_n:
@@ -296,24 +356,26 @@ class SegmentAssembler:
 			self.known_len = position + len(data)
 		for i in range(len(data)):
 			self.data[i + position] = data[i]
-		self.segs_needed = self.segs_needed & (~(1 << seg_i) & self.seg_mask)
+		self.block_ack = self.block_ack.set(seg_i)
 
 	def insert_ctl(self, pdu: SegmentedControlLowerPDU):
 		assert self.ctl, "trying to insert a control pdu into an access segment assembly"
-		position = pdu.seg_n * pdu.SEG_LEN
-		self.insert_segment(pdu.seg_o, position, pdu.segment)
+		self.insert_segment(pdu.seg_o, pdu.segment)
 
 	def insert_access(self, pdu: SegmentedAccessLowerPDU):
 		assert not self.ctl, "trying to insert a access pdu into a ctl segment assembly"
-		position = pdu.seg_n * pdu.SEG_LEN
-		self.insert_segment(pdu.seg_o, position, pdu.segment)
+		self.insert_segment(pdu.seg_o, pdu.segment)
 
 	def upper_bytes(self) -> bytes:
 		assert self.is_done() and self.known_len, "segment assemble must be done before getting upper transport pdu"
 		return self.data[:self.known_len]
 
 	def is_done(self) -> bool:
-		return self.segs_needed == 0
+		return self.block_ack == 0
+
+	def get_upper_control(self) -> 'UnsegmentedControlLowerPDU':
+		assert self.ctl
+		return UnsegmentedControlLowerPDU.from_bytes(self.upper_bytes())
 
 	def get_upper(self) -> Union[UpperEncryptedAccessPDU]:
 		if self.ctl:
@@ -328,16 +390,117 @@ class SegmentAssembler:
 		else:
 			self.insert_access(pdu)
 
+	def ack(self) -> SegmentAcknowledgementPDU:
+		return SegmentAcknowledgementPDU(self.obo, self.seq_zero, self.block_ack)
 
-def make_lower_pdu(raw_bytes: bytes, ctl: bool):
-	if (raw_bytes[0] & 0x80) == 1:
-		if ctl:
-			if raw_bytes[0] == 0x80:
-				return SegmentedAccessLowerPDU.from_bytes(raw_bytes)
+
+class Reassemblers:
+	__slots__ = "contexts",
+
+	def __init__(self):
+		self.contexts: Dict[SegmentSrc, SegmentAssembler] = dict()
+
+	def handle_control(self, control_pdu: UnsegmentedControlLowerPDU):
+		pass
+
+	def handle(self, src: UnicastAddress, pdu: LowerSegmentedPDU) -> Optional[UpperEncryptedAccessPDU]:
+		seg_src = SegmentSrc(src, pdu.seq_zero)
+		if seg_src not in self.contexts:
+			if pdu.seg_o == 0:
+				self.contexts[seg_src] = SegmentAssembler(src, pdu)
+
+				return
 			else:
-				return SegmentedControlLowerPDU.from_bytes(raw_bytes)
+				# TODO: Allow reassembly out of order
+				raise ValueError("unknown segment pdu")
+		else:
+			assembler: SegmentAssembler = self.contexts[seg_src]
+			assembler.insert(pdu)
+			if assembler.is_done():
+				del self.contexts[seg_src]
+				if assembler.ctl:
+					self.handle_control(assembler.get_upper_control())
+				else:
+					upper = assembler.get_upper()
+					return upper
+			return None
+
+
+class SegmentedMessage:
+	__slots__ = "pdus", "block_ack", "seg_n", "timer_thread", "ttl", "retransmit", "send_event"
+
+	def __init__(self, pdus: List[LowerSegmentedPDU], ttl: Optional[TTL] = 10, retransmit: Optional[int] = 3):
+		self.pdus = pdus
+		self.seg_n = pdus[0].seg_n
+		self.block_ack = BlockAck(0, self.seg_n)
+		self.ttl = ttl
+		self.retransmit = retransmit
+		self.send_event = threading.Event()
+		self.timer_thread = threading.Thread(target=self._timer_func)
+
+	def cancel(self) -> None:
+		self.retransmit = 0
+
+	def start(self) -> None:
+		self.timer_thread.start()
+
+	def trigger_send(self) -> None:
+		if self.retransmit == 0 or not self.timer_thread.is_alive():
+			raise ValueError("not currently alive")
+		self.send_event.set()
+
+	def _should_transmit(self) -> bool:
+		return self.retransmit > 0
+
+	def _timer_func(self) -> None:
+		while self._should_transmit():
+			self._unack_timeout()
+			if not self._should_transmit():
+				continue
+			self.send_event.clear()
+			self.send_event.wait(self.interval())
+
+	def _unack_timeout(self) -> None:
+		self._send_unacked()
+		self.retransmit -= 1
+
+	def _send_unacked(self) -> None:
+		for pdu in self.get_unacked():
+			self.send_func(pdu)
+
+	def send_func(self, pdu: LowerSegmentedPDU):
+		"""
+		Overwrite me to support automatic resending
+		:param pdu:
+		:return:
+		"""
+		pass
+
+	def interval(self) -> int:
+		return 200 * 50 * self.ttl
+
+	def get_unacked(self) -> Generator[LowerSegmentedPDU, None, None]:
+		for i in self.block_ack.get_unacked_pdu_indexes():
+			yield self.pdus[i]
+
+	def handle_ack(self, ack: SegmentAcknowledgementPDU):
+		self.block_ack = ack.block_ack
+		if self.block_ack.block == 0:
+			# Empty block ack so we cancel
+			self.cancel()
+		if self.retransmit:
+			self.trigger_send()
+
+
+def make_lower_pdu(lower_pdu_bytes: bytes, ctl: bool):
+	if (lower_pdu_bytes[0] & 0x80) == 1:
+		if ctl:
+			if lower_pdu_bytes[0] == 0x80:
+				return SegmentedAccessLowerPDU.from_bytes(lower_pdu_bytes)
+			else:
+				return SegmentedControlLowerPDU.from_bytes(lower_pdu_bytes)
 	else:
 		if ctl:
-			return UnsegmentedControlLowerPDU.from_bytes(raw_bytes)
+			return UnsegmentedControlLowerPDU.from_bytes(lower_pdu_bytes)
 		else:
-			return UnsegmentedAccessLowerPDU.from_bytes(raw_bytes)
+			return UnsegmentedAccessLowerPDU.from_bytes(lower_pdu_bytes)
