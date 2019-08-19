@@ -1,5 +1,10 @@
 import time
+"""
+	WARNING: Ero-Bluetooth-Mesh is very unfinished and in a brokenstate!
+	It is in ACTIVE DEVELOPMENT
+	
 
+"""
 from bt_mesh import network
 from bt_mesh.bearers import bleson_bearer, pb_adv
 print("starting")
