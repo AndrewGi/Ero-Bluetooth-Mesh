@@ -3,18 +3,22 @@ Built in bearer is using a slightly modifier [Bleson](https://github.com/TheCell
 
 See better_mesh_ctl.py for an example.
 
+### ALWAYS LOOK FOR HELP/CONTRIBUTERS ###
+
 ## Features Supported:
 - Hardware Agnostic Bearer Layer 
 - Network Layer
 - Transport Layer
 - Access Layer
 - Provisioning others (Only PB-ADV/PB-GENERIC) for now
+- Proxy (No GATT yet)
+- Example TLS/SSL Mesh Proxy
 
 ## Features Planned:
 - Virtual devices
 - PB-GATT
 - Gatt Proxy
-- Custom Sockets Proxy
+- Replay Cache
 - Message Cache
 - Model Layer
 - Friends
