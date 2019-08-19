@@ -1,26 +1,34 @@
 import socket
 import threading
 import ssl
+import enum
 from typing import *
 from applications.bluetooth_mesh.bt_mesh.proxy import PDU
 from .. import proxy, bearer
 
-MAGIC_NUMBER = 0x37
-INVERT_MAGIC_NUMBER = (~MAGIC_NUMBER) & 0xFF
-MAGIC_START_SEQ = bytes([MAGIC_NUMBER, INVERT_MAGIC_NUMBER])
+MAGIC_NUMBER: int = 0x37
+INVERT_MAGIC_NUMBER: int = (~MAGIC_NUMBER) & 0xFF
+MAGIC_START_SEQ: bytes = bytes([MAGIC_NUMBER, INVERT_MAGIC_NUMBER])
+
+
+class ProxyMessageType(enum.IntEnum):
+	PROXY_PDU = 0x01
+	CUSTOM_PDU_START = 0x3F # reserved for the user
 
 
 class SocketProxyPipe:
 	def __init__(self, secure_socket: ssl.SSLSocket):
-		self.sock = secure_socket
-		self.is_open = True
-		self.read_lock = threading.Lock()
-		self.write_lock = threading.Lock()
+		self.sock: ssl.SSLSocket = secure_socket
+		self.is_open: bool = True
+		self.read_lock: threading.Lock = threading.Lock()
+		self.write_lock: threading.Lock = threading.Lock()
 
 	def __del__(self):
 		self.sock.close()
 
 	def _recv(self, amount: int, timeout: bool = True) -> bytearray:
+		if amount <= 0:
+			raise ValueError(f"amount too low {amount}<=0")
 		out = bytearray()
 		with self.read_lock:
 			while amount:
@@ -52,14 +60,16 @@ class SocketProxyPipe:
 
 	def read_proxy_pdu(self) -> proxy.PDU:
 		self.wait_for_double_magic()
-		len_message = int.from_bytes(self.sock.recv(2), byteorder="big")
+		message_type = ProxyMessageType(int.from_bytes(self._recv(1), byteorder="big"))
+		assert message_type == ProxyMessageType.PROXY_PDU
+		len_message = int.from_bytes(self._recv(2), byteorder="big")
 		msg = self._recv(len_message)
 		return proxy.PDU.from_bytes(msg)
 
 	def send_proxy_pdu(self, pdu: proxy.PDU):
 		pdu_bytes = pdu.to_bytes()
 		len_bytes = len(pdu_bytes).to_bytes(2, byteorder="big")
-		self._send(MAGIC_START_SEQ + len_bytes + pdu_bytes)
+		self._send(MAGIC_START_SEQ + ProxyMessageType.PROXY_PDU.to_bytes(1, "big") + len_bytes + pdu_bytes)
 
 
 class SocketProxyServer(proxy.ProxyServer):

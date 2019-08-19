@@ -1,7 +1,7 @@
 import enum
 from typing import List
 
-from . import beacon
+from . import beacon, mesh
 
 
 class BearerType(enum.IntEnum):
@@ -11,12 +11,6 @@ class BearerType(enum.IntEnum):
 	Other = 4
 
 
-class TransmitParameters:
-	__slots__ = "times", "delay_ms"
-
-	def __init__(self, times: int, delay_ms: int):
-		self.times = times
-		self.delay_ms = delay_ms
 
 
 class Bearer:
@@ -24,7 +18,7 @@ class Bearer:
 	def bearer_type(cls):
 		raise NotImplementedError()
 
-	def send_network_pdu(self, network_pdu: bytes, parameters: TransmitParameters):
+	def send_network_pdu(self, network_pdu: bytes, parameters: mesh.TransmitParameters):
 		raise NotImplementedError()
 
 	def send_beacon(self, mesh_beacon_payload: beacon.Beacon):

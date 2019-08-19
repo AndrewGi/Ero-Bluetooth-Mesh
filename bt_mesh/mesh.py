@@ -1,14 +1,17 @@
 from typing import *
-from enum import IntEnum
+from enum import IntEnum, IntFlag
 from uuid import UUID
 from . import crypto
-
+from .serialize import ByteSerializable
 KeyIndex = NewType("NetIndex", int)
 NetKeyIndex = NewType("NetKeyIndex", KeyIndex)
 AppKeyIndex = NewType("AppKeyIndex", KeyIndex)
 
 CompanyID = NewType("CompanyID", int)
 SIGCompanyID = CompanyID(0)
+
+ProductID = NewType("ProductID", int)
+VersionID = NewType("VersionID", int)
 
 NID = NewType("NID", int)
 AID = NewType("AID", int)
@@ -76,6 +79,7 @@ class Address(int):
 		super().__init__(addr)
 
 
+
 class GroupAddress(Address):
 	def __init__(self, addr: int):
 		if 0xC000 & addr != 0xC000:
@@ -102,6 +106,26 @@ class VirtualAddress(Address):
 		super().__init__(self.addr())
 
 
+class TransmitParameters:
+	__slots__ = "times", "delay_ms"
+
+	def __init__(self, times: int, delay_ms: int):
+		self.times = times
+		self.delay_ms = delay_ms
+
+	@classmethod
+	def default(cls) -> 'TransmitParameters':
+		return cls(5, 100)
+
+class Features(IntFlag):
+	Relay = 1
+	Proxy = 2
+	Friend = 4
+	LowPower = 8
+
+
+class LocationDescriptor:
+	pass
 
 class SensorDescriptor:
 	PropertyID = NewType("PropertyID", int)

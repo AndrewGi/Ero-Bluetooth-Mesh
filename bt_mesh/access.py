@@ -4,7 +4,17 @@ import struct
 
 ModelID = NewType("ModelID", int)
 
-ACK_TIMEOUT = 30 # 30 seconds is minimum act timeout
+
+class ModelIdentifier:
+	__slots__ = "company_id", "model_id"
+
+	def __init__(self, company_id: CompanyID, model_id: ModelID):
+		self.company_id = company_id
+		self.model_id = model_id
+
+
+ACK_TIMEOUT = 30  # 30 seconds is minimum act timeout
+
 
 class Opcode:
 	__slots__ = ("opcode", "company_id")
@@ -98,8 +108,10 @@ class AccessPayload:
 class AccessMessage:
 	__slots__ = "src", "dst", "opcode", "payload", "big_mic", "ttl", "appkey_index", "netkey_index", "device_key", "force_segment"
 
-	def __init__(self, src: Address, dst: Address, ttl: TTL, opcode: Opcode, payload: bytes, appkey_index: Optional[AppKeyIndex],
-				 netkey_index: NetKeyIndex, big_mic: Optional[bool] = False, device_key: Optional[bool] = False, force_segment: Optional[bool] = False):
+	def __init__(self, src: Address, dst: Address, ttl: TTL, opcode: Opcode, payload: bytes,
+				 appkey_index: Optional[AppKeyIndex],
+				 netkey_index: NetKeyIndex, big_mic: Optional[bool] = False, device_key: Optional[bool] = False,
+				 force_segment: Optional[bool] = False):
 		if device_key and appkey_index is not None:
 			raise ValueError("device key True but also given an appkey_index")
 		self.src = src
@@ -113,6 +125,12 @@ class AccessMessage:
 		self.device_key = device_key
 		self.force_segment = force_segment
 
-	def payload(self) -> AccessPayload:
+	def access_payload(self) -> AccessPayload:
 		return AccessPayload(self.opcode, self.payload)
 
+
+class AccessHandler:
+	__slots__ = "address",
+
+	def __init__(self, address: 'AccessHandler') -> None:
+		self.address = address

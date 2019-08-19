@@ -1,7 +1,7 @@
 import enum
 from abc import ABC, abstractmethod
 from typing import Generator, Iterator, Optional
-from . import prov, bearer, beacon
+from . import bearer, beacon, mesh
 
 
 class MessageType(enum.IntEnum):
@@ -79,12 +79,12 @@ def segment_pdu(message_type: MessageType, mtu: int, data: bytes) -> Generator[P
 
 
 class ProxyBearer(bearer.Bearer, ABC):
-	__slots__ = "sar_assembler",
+	__slots__ = "sar_assembler", "transmit_parameters"
 
 	def __init__(self):
 		super().__init__(None)
-		self.sar_assembler = None  # type: Optional[SARAssembler]
-
+		self.sar_assembler: Optional[SARAssembler] = None
+		self.transmit_parameters: mesh.TransmitParameters = mesh.TransmitParameters.default()
 	@classmethod
 	def bearer_type(cls):
 		return bearer.BearerType.Proxy
@@ -138,7 +138,7 @@ class ProxyServer(ProxyBearer, ABC):
 
 	def recv_network_pdu(self, network_pdu: bytes):
 		if self.mesh_bearer:
-			self.mesh_bearer.send_network_pdu(network_pdu)
+			self.mesh_bearer.send_network_pdu(network_pdu, se)
 
 	def __init__(self, mesh_bearer: bearer.Bearer):
 		super().__init__()
