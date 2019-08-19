@@ -44,8 +44,8 @@ class State:
 		except KeyError:
 			raise UnknownOpcode(str(message.opcode))
 
-	def send(self, msg: access.AccessMessage) -> None:
-		raise NotImplementedError()
+	def publish(self, opcode: access.Opcode, status_message: ModelMessage) -> None:
+		raise NotImplementedError("this is my job")
 
 class StatusMessage(ModelMessage, ABC):
 	pass
@@ -59,11 +59,8 @@ class StatusStateServer(State, ABC):
 		super().__init__()
 		self.status_opcode = status_opcode
 
-	def publish(self, status_message: StatusMessage) -> None:
-		raise NotImplementedError()
-
 	def publish_status(self) -> None:
-		self.publish(self.status())
+		self.publish(self.status_opcode, self.status())
 
 	def status(self) -> StatusMessage:
 		raise NotImplementedError()
@@ -81,12 +78,10 @@ class GetStateServer(StatusStateServer, ABC):
 			return # we're expected an empty message
 		return self.status()
 
-	def get(self, get_request: ModelMessage) -> None:
-		get_request.to_bytes()
 
 
 
-class StatusStateClient(State):
+class StatusStateClient(State, ABC):
 	def __init__(self, status_opcode: access.Opcode):
 		super().__init__()
 		self.status_opcode = status_opcode
@@ -95,12 +90,13 @@ class StatusStateClient(State):
 	def on_status(self, msg: access.AccessMessage) -> None:
 		raise NotImplementedError()
 
-class GetStateClient(StatusStateClient):
+class GetStateClient(StatusStateClient, ABC):
 	def __init__(self, get_opcode: access.Opcode, status_opcode: access.Opcode) -> None:
 		super().__init__(status_opcode)
 		self.get_opcode = get_opcode
 
-	def get(self) -> None:
+	def request_get(self, get_request: ModelMessage) -> None:
+		self.publish(self.get_opcode, get_request)
 
 
 
@@ -126,7 +122,7 @@ class SetStateServer(StatusStateServer, ABC):
 	def on_set_no_ack(self, msg: access.AccessMessage) -> None:
 		response = self.set(msg)
 		if response:
-			self.publish(response)
+			self.publish(self.status_opcode, response)
 
 class SetStateClient(GetStateClient, ABC):
 	def __init__(self, status_opcode: access.Opcode, get_opcode: access.Opcode, set_ack_opcode: Optional[access.Opcode], set_no_ack_opcode: Optional[access.Opcode]) -> None:
@@ -135,6 +131,13 @@ class SetStateClient(GetStateClient, ABC):
 		super().__init__(status_opcode, get_opcode)
 		self.set_ack_opcode = set_ack_opcode
 		self.set_no_ack_opcode = set_no_ack_opcode
+
+	def request_set_ack(self, request: ModelMessage) -> None:
+		self.publish(self.set_ack_opcode, request)
+
+	def request_set_no_ack(self, request: ModelMessage) -> None:
+		self.publish(self.set_no_ack_opcode, request)
+
 
 
 

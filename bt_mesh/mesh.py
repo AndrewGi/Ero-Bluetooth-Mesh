@@ -1,17 +1,17 @@
 from typing import *
-from enum import IntEnum, IntFlag
+from enum import IntEnum, IntFlag, Enum
 from uuid import UUID
 from . import crypto
-from .serialize import ByteSerializable
+from .serialize import *
 KeyIndex = NewType("NetIndex", int)
 NetKeyIndex = NewType("NetKeyIndex", KeyIndex)
 AppKeyIndex = NewType("AppKeyIndex", KeyIndex)
 
-CompanyID = NewType("CompanyID", int)
+CompanyID = NewType("CompanyID", U16)
 SIGCompanyID = CompanyID(0)
 
-ProductID = NewType("ProductID", int)
-VersionID = NewType("VersionID", int)
+ProductID = NewType("ProductID", U16)
+VersionID = NewType("VersionID", U16)
 
 NID = NewType("NID", int)
 AID = NewType("AID", int)
