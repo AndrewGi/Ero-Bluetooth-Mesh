@@ -19,6 +19,7 @@ This is a learning experience for me so there may be some big inconsistences as 
 - Provisioning others (Only PB-ADV/PB-GENERIC) for now
 - Proxy (No GATT yet)
 - Example TLS/SSL Mesh Proxy
+- Expandable Serialization Abstractions
 
 ## Features Planned:
 - Virtual devices
@@ -31,3 +32,6 @@ This is a learning experience for me so there may be some big inconsistences as 
 - Low Power?
 - Relay
 - Being Provision
+
+### Serialization:
+Some Bluetooth Mesh information needs to be stored persistantly (Keys, Friendships, Replay Cache, Addresses, etc). This is achieved by those objects implemented `Serializable` which implements `to_dict` and `from_dict`. From there, you can store/transport to to whatever encoding you want (JSON, YAML, INI, CBOR, etc). The choice to use JSON in the examples is just for ease of use. 
