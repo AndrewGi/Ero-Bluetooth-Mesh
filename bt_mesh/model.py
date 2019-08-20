@@ -3,10 +3,24 @@ from abc import ABC
 from .mesh import *
 from . import access
 from .access import ModelID
-
+from .foundation import PublishPeriod
 
 class ModelMessage(ByteSerializable, ABC):
 	pass
+
+
+class EmptyModelMessage(ByteSerializable):
+	def __init__(self) -> None:
+		pass
+
+	def to_bytes(self) -> bytes:
+		return bytes()
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'EmptyModelMessage':
+		if len(b) != 0:
+			raise ValueError("bytes must be empty")
+		return cls()
 
 
 HandlerCallable = Callable[Optional[ModelMessage], access.AccessMessage]
@@ -176,3 +190,4 @@ class SetStateClient(GetStateClient, ABC):
 
 	def request_set_no_ack(self, request: ModelMessage) -> None:
 		self.publish(self.set_no_ack_opcode, request)
+

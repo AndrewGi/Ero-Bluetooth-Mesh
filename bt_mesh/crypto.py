@@ -168,8 +168,10 @@ class IdentityKey(Key):
 class BeaconKey(Key):
 	pass
 
+
 class SessionNonce(Nonce):
 	__slots__ = "nonce",
+
 	def __init__(self, nonce: bytes):
 		if len(nonce) != 13:
 			raise ValueError(f"nonce should be 13 bytes not {len(nonce)}")
@@ -182,6 +184,7 @@ class SessionNonce(Nonce):
 	@classmethod
 	def from_secret(cls, secret: 'ECDHSharedSecret', provisioning_salt: ProvisioningSalt) -> 'SessionNonce':
 		return cls(k1(provisioning_salt, secret, b"prsn")[:13])
+
 
 class SessionKey(Key):
 	@classmethod
@@ -327,14 +330,12 @@ class TransportSecurityMaterial(SecurityMaterial, ABC):
 		return self.aes_ccm_decrypt(nonce, data, mic, virtual_address.uuid.bytes if virtual_address else None)
 
 
-
 class AppSecurityMaterial(TransportSecurityMaterial):
 	def to_dict(self) -> Dict[str, Any]:
 		return {
 			"key": self.key,
 			"aid": self.aid
 		}
-
 
 	@classmethod
 	def from_dict(cls, d: Dict[str, Any]):
@@ -350,14 +351,14 @@ class AppSecurityMaterial(TransportSecurityMaterial):
 
 
 class DeviceSecurityMaterial(TransportSecurityMaterial):
-	def to_dict(self) -> Dict[str, Any]:
+	def to_dict(self) -> Dict[str, DeviceKey]:
 		return {
-			"key": self.key
+			"key": cast(DeviceKey, self.key)
 		}
 
 	@classmethod
-	def from_dict(cls, d: Dict[str, Any]):
-		pass
+	def from_dict(cls, d: Dict[str, DeviceKey]):
+		return cls(d["key"])
 
 	def __init__(self, key: DeviceKey):
 		super().__init__(key)
@@ -454,7 +455,7 @@ class KeyRefreshPhase(enum.IntEnum):
 	Phase3 = 0x03  # Revoke old keys
 
 
-class KeyIndexSlot:
+class KeyIndexSlot(Serializable):
 	__slots__ = "index", "new", "old", "phase"
 
 	def __init__(self, index: KeyIndex, old: SecurityMaterial, new: Optional[SecurityMaterial] = None,
@@ -486,6 +487,19 @@ class KeyIndexSlot:
 		self.new = None
 		self.phase = KeyRefreshPhase.Normal
 
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"index": self.index,
+			"phase": self.phase,
+			"new": self.new.to_dict(),
+			"old": self.old.to_dict()
+		}
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]) -> 'KeyIndexSlot':
+		return cls(index=d["index"], phase=d["phase"],
+				   new=SecurityMaterial.from_dict(d["new"]), old=SecurityMaterial.from_dict(d["old"]))
+
 
 class AppKeyIndexSlot(KeyIndexSlot):
 	def __init__(self, index: AppKeyIndex, old: AppSecurityMaterial, new: Optional[AppSecurityMaterial] = None,
@@ -505,36 +519,43 @@ class AppKeyIndexSlot(KeyIndexSlot):
 		if new and new.aid == aid:
 			yield new
 
+
 class NetKeyIndexSlot(KeyIndexSlot):
 	def __init__(self, index: NetKeyIndex, old: NetworkSecurityMaterial, new: Optional[NetworkSecurityMaterial] = None,
 				 phase: Optional[KeyRefreshPhase] = KeyRefreshPhase.Normal):
 		super().__init__(index, old, new, phase)
 
+	@classmethod
+	def new_primary(cls) -> 'NetKeyIndexSlot':
+		return cls(NetKeyIndex(0x0000), NetworkKey.random().security_material())
+
 	def tx_sm(self) -> NetworkSecurityMaterial:
 		return cast(NetworkSecurityMaterial, super().tx_sm())
 
 	def rx_sms(self) -> Tuple[NetKeyIndex, NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]]:
-		return self.index, cast(Tuple[NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]], super().rx_sms())
+		return (self.index,) + cast(Tuple[NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]], super().rx_sms())
 
 	def rx_by_nid(self, nid: NID) -> Generator[NetworkSecurityMaterial, None, None]:
-		old, new = self.rx_sms()
+		_index, old, new = self.rx_sms()
 		if old.nid == nid:
 			yield old
 		if new and new.nid == nid:
 			yield new
 
 
-
-
-class GlobalContext:
+class GlobalContext(Serializable):
 	__slots__ = "apps", "nets", "iv_index"
 
-	def __init__(self, iv_index: IVIndex, primary_net: NetKeyIndexSlot, device_sm: DeviceSecurityMaterial):
+	def __init__(self, iv_index: IVIndex, primary_net: NetKeyIndexSlot):
 		if primary_net.index != 0:
 			raise ValueError(f"primary net key has to have index 0x0000 not 0x{primary_net.index:04X}")
 		self.iv_index = iv_index
 		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
 		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
+
+	@classmethod
+	def new(cls) -> 'GlobalContext':
+		return cls(IVIndex(0), NetKeyIndexSlot.new_primary())
 
 	def get_iv_index(self, ivi: Optional[bool] = None):
 		# TODO: get iv_index by ivi
@@ -554,8 +575,16 @@ class GlobalContext:
 		self.nets[slot.index] = slot
 
 	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"iv_index": self.iv_index,
+			"apps": [d.to_dict() for d in self.apps.values()],
+			"nets": [d.to_dict() for d in self.nets.values()]
+		}
 
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]):
 
+		cls(IVIndex(d["iv_index"]))
 
 	def get_nid_rx_keys(self, nid: NID) -> Generator[[NetKeyIndex, NetworkSecurityMaterial], None, None]:
 		for slot in self.nets.values():
@@ -574,13 +603,16 @@ class GlobalContext:
 		return self.nets[index]
 
 
-
 class LocalContext:
 	__slots__ = "seq", "device_sm"
 
-	def __init__(self, seq: Seq, device_sm: DeviceSecurityMaterial):
+	def __init__(self, seq: Seq, device_sm: Optional[DeviceSecurityMaterial]):
 		self.seq = seq
 		self.device_sm = device_sm
+
+	@classmethod
+	def new_provisioner(cls) -> 'LocalContext':
+		return cls(Seq(0), None)
 
 	def seq_inc(self):
 		self.seq += 1

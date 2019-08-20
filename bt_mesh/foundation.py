@@ -144,3 +144,33 @@ class Fault(U8, Enum):
 	InternalBus = U8(0x30)
 	MechanismJammed = U8(0x32)
 	VendorStart = U8(0x80)
+
+
+SubscriptionAddress = Union[GroupAddress, VirtualAddress]
+
+
+class SubscriptionList:
+	__slots__ = "addresses",
+
+	def __init__(self, addresses: List[SubscriptionAddress]):
+		self.addresses = addresses
+
+
+class ModelPublication:
+	__slots__ = "address", "period", "appkey_index", "friendship_credentials_flag", "ttl", "retransmit"
+
+	def __init__(self, address: Address, period: PublishPeriod, appkey_index: AppKeyIndex,
+				 friendship_credentials_flag: bool,
+				 ttl: TTL, retransmit: RetransmitParameters):
+		self.address = address
+		self.period = period
+		self.appkey_index = appkey_index
+		self.friendship_credentials_flag = friendship_credentials_flag
+		self.ttl = ttl
+		self.retransmit = retransmit
+
+
+class NetKeyList(ByteSerializable):
+	__slots__ = "indexed_list",
+	def __init__(self, indexed_list: Dict[NetKeyIndex, crypto.NetKeyIndexSlot]):
+

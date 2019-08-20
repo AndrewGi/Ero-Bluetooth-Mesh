@@ -60,7 +60,7 @@ class NonceType(IntEnum):
 	END = 0xFF
 
 
-class TTL(int):
+class TTL(U8):
 	MAX_TTL = 127
 
 	def __init__(self, ttl: int):
@@ -116,6 +116,30 @@ class TransmitParameters:
 	@classmethod
 	def default(cls) -> 'TransmitParameters':
 		return cls(5, 100)
+
+class RetransmitParameters(ByteSerializable):
+	__slots__ = "count", "steps"
+
+	def __init__(self, count: int, steps: int) -> None:
+		if count > 0x07:
+			raise ValueError(f"count {count}>0x07")
+		if steps > 0x1F:
+			raise ValueError(f"steps {steps}>0x1F")
+		self.count = count
+		self.steps = steps
+
+	def interval_ms(self) -> int:
+		return 50 * (self.count+1)
+
+	def to_bytes(self) -> bytes:
+		return U8(self.count | (self.steps << 3)).to_bytes()
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'RetransmitParameters':
+		v = U8.from_bytes(b).value
+		count = v & 0x3
+		steps = (v >> 3) & 0x1F
+		return cls(count=count, steps=steps)
 
 class Features(IntFlag):
 	Relay = 1
