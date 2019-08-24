@@ -146,6 +146,26 @@ class Fault(U8, Enum):
 	VendorStart = U8(0x80)
 
 
+class Status(U8, Enum):
+	Success = U8(0x00)
+	InvalidAddress = U8(0x01)
+	InvalidModel = U8(0x02)
+	InvalidAppKeyIndex = U8(0x03)
+	InvalidNetKeyIndex = U8(0x04)
+	InsufficientResources = U8(0x05)
+	KeyIndexAlreadyStored = U8(0x06)
+	InvalidPublishParameters = U8(0x07)
+	NotASubscribeModel = U8(0x08)
+	StorageFailure = U8(0x09)
+	FeatureNotSupported = U8(0x0A)
+	CannotUpdate = U8(0x0B)
+	CannotRemove = U8(0x0C)
+	CannotBind = U8(0x0D)
+	TemporarilyUnableToChangeState = U8(0x0E)
+	CannotSet = U8(0x0F)
+	UnspecifiedError = U8(0x10)
+	InvalidBinding = U8(0x11)
+
 SubscriptionAddress = Union[GroupAddress, VirtualAddress]
 
 

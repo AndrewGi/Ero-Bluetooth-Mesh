@@ -2,7 +2,7 @@ from typing import *
 from .mesh import *
 from . import crypto
 
-class RemoteDevice:
+class RemoteDevice(Serializable):
 	__slots__ = "primary_address", "element_count"
 
 	def __init__(self, primary_address: UnicastAddress, element_count: int):
@@ -26,12 +26,12 @@ class RemoteDevice:
 
 	@classmethod
 	def from_dict(cls, d: Dict) -> 'RemoteDevice':
-		return cls(primary_address=d["primary_address"], element_count=d["element_count"])
+		return cls(primary_address=UnicastAddress(d["primary_address"]), element_count=d["element_count"])
 
 
-class Network:
+class Network(Serializable):
 	__slots__ = "global_context", "remote_devices", "end_address"
-
+	# TODO: Something better than end_address
 	def __init__(self, global_context: crypto.GlobalContext, remote_devices: Dict[UnicastAddress, RemoteDevice], end_address: UnicastAddress):
 		self.remote_devices: Dict[UnicastAddress, RemoteDevice] = remote_devices
 		self.global_context: crypto.GlobalContext = global_context
@@ -53,5 +53,18 @@ class Network:
 	def to_dict(self) -> Dict[str, Any]:
 		return {
 			"global_context": self.global_context.to_dict(),
-			"remote_devices": {device.primary_address: device.to_dict() for device in self.remote_devices.values()}
+			"remote_devices": {device.primary_address: device.to_dict() for device in self.remote_devices.values()},
 		}
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]) -> 'Network':
+		global_context = crypto.GlobalContext.from_dict(d["global_context"])
+		remote_devices = dict()
+		last_address = Address(0)
+		for raw_device in d["remote_devices"]:
+			device = RemoteDevice.from_dict(raw_device)
+			remote_devices[device.primary_address] = device
+			if device.last_element_address() > last_address:
+				last_address = device.last_element_address()
+
+		return cls(global_context, remote_devices, last_address)

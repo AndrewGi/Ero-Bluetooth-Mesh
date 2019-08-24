@@ -3,9 +3,34 @@ from enum import IntEnum, IntFlag, Enum
 from uuid import UUID
 from . import crypto
 from .serialize import *
-KeyIndex = NewType("NetIndex", int)
-NetKeyIndex = NewType("NetKeyIndex", KeyIndex)
-AppKeyIndex = NewType("AppKeyIndex", KeyIndex)
+
+
+class KeyIndex(U16):
+	INDEX_LEN = 12
+	byteorder = "little"
+
+	def join(self, other: 'KeyIndex') -> bytes:
+		index_0 = self.value
+		index_1 = other.value
+		return U24(index_0 | (index_1 << self.INDEX_LEN)).to_bytes()
+
+	@classmethod
+	def unjoin(cls, b: bytes) -> Tuple['KeyIndex', 'KeyIndex']:
+		if len(b) != 2:
+			raise ValueError(f"expected 2 bytes got {len(b)}")
+		both_indexes = U24.from_bytes(b)
+		key_mask = (1 << cls.INDEX_LEN) - 1
+		index_0 = both_indexes.value & key_mask
+		index_1 = (both_indexes.value >> cls.INDEX_LEN) & key_mask
+		return KeyIndex(index_0), KeyIndex(index_1)
+
+class NetKeyIndex(KeyIndex):
+	pass
+
+
+class AppKeyIndex(KeyIndex):
+	pass
+
 
 CompanyID = NewType("CompanyID", U16)
 SIGCompanyID = CompanyID(0)
@@ -18,6 +43,7 @@ AID = NewType("AID", int)
 Seq = NewType("Seq", int)
 SeqAuth = NewType("SeqAuth", int)
 SeqZero = NewType("SeqZero", int)
+
 
 def seq_bytes(seq: Seq):
 	return seq.to_bytes(3, byteorder="big")
@@ -79,7 +105,6 @@ class Address(int):
 		super().__init__(addr)
 
 
-
 class GroupAddress(Address):
 	def __init__(self, addr: int):
 		if 0xC000 & addr != 0xC000:
@@ -117,6 +142,7 @@ class TransmitParameters:
 	def default(cls) -> 'TransmitParameters':
 		return cls(5, 100)
 
+
 class RetransmitParameters(ByteSerializable):
 	__slots__ = "count", "steps"
 
@@ -129,7 +155,7 @@ class RetransmitParameters(ByteSerializable):
 		self.steps = steps
 
 	def interval_ms(self) -> int:
-		return 50 * (self.count+1)
+		return 50 * (self.count + 1)
 
 	def to_bytes(self) -> bytes:
 		return U8(self.count | (self.steps << 3)).to_bytes()
@@ -141,6 +167,7 @@ class RetransmitParameters(ByteSerializable):
 		steps = (v >> 3) & 0x1F
 		return cls(count=count, steps=steps)
 
+
 class Features(IntFlag):
 	Relay = 1
 	Proxy = 2
@@ -150,6 +177,7 @@ class Features(IntFlag):
 
 class LocationDescriptor:
 	pass
+
 
 class SensorDescriptor:
 	PropertyID = NewType("PropertyID", int)

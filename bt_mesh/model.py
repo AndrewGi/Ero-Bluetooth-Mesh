@@ -9,7 +9,7 @@ class ModelMessage(ByteSerializable, ABC):
 	pass
 
 
-class EmptyModelMessage(ByteSerializable):
+class EmptyModelMessage(ModelMessage):
 	def __init__(self) -> None:
 		pass
 

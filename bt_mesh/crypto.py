@@ -110,7 +110,7 @@ class ProxyNonce(Nonce):
 		return self.STRUCT.pack(self.nonce_type, seq_bytes(self.seq), self.src, self.iv_index)
 
 
-class Key:
+class Key(ByteSerializable):
 	KEY_LEN = 16
 	__slots__ = 'key_bytes',
 
@@ -127,7 +127,7 @@ class Key:
 		return self.key_bytes.hex()
 
 	@classmethod
-	def from_str(cls, s: str) -> 'Key':
+	def from_hex(cls, s: str) -> 'Key':
 		return cls(bytearray.fromhex(s))
 
 	def __str__(self) -> str:
@@ -144,7 +144,14 @@ class Key:
 
 	@classmethod
 	def _random_key(cls) -> 'Key':
-		return cls(os.urandom(cls.KEY_LEN))
+		return cls(bytearray(os.urandom(cls.KEY_LEN)))
+
+	def to_bytes(self) -> bytes:
+		return self.key_bytes
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'Key':
+		return cls(bytearray(b))
 
 
 class AppKey(Key):
@@ -169,7 +176,7 @@ class BeaconKey(Key):
 	pass
 
 
-class SessionNonce(Nonce):
+class SessionNonce(Nonce, ABC):
 	__slots__ = "nonce",
 
 	def __init__(self, nonce: bytes):
@@ -257,7 +264,7 @@ class ECCPublicKey:
 
 
 class ECDHSharedSecret(Key):
-	def __init__(self, secret_bytes: bytes):
+	def __init__(self, secret_bytes: bytearray):
 		super().__init__(secret_bytes)
 
 
@@ -302,15 +309,26 @@ def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_da
 		raise InvalidMIC()
 
 
-class SecurityMaterial(Serializable, ABC):
-	pass
+class SecurityMaterial(ABC, ByteSerializable):
+	__slots__ = "key"
+
+	def __init__(self, key: Key):
+		self.key = key
+
+	def to_bytes(self) -> bytes:
+		return self.key.to_bytes()
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'SecurityMaterial':
+		return cls(Key.from_bytes(b))
+
+	def to_bytes(self) -> bytes:
+		return self.key.to_bytes()
+
+
 
 
 class TransportSecurityMaterial(SecurityMaterial, ABC):
-	__slots__ = "key"
-
-	def __init__(self, key: crypto.Key):
-		self.key = key
 
 	def aes_ccm_encrypt(self, nonce: Nonce, data: bytes, mic_len: Optional[int] = 32,
 						associated_data: Optional[bytes] = None) -> \
@@ -331,16 +349,6 @@ class TransportSecurityMaterial(SecurityMaterial, ABC):
 
 
 class AppSecurityMaterial(TransportSecurityMaterial):
-	def to_dict(self) -> Dict[str, Any]:
-		return {
-			"key": self.key,
-			"aid": self.aid
-		}
-
-	@classmethod
-	def from_dict(cls, d: Dict[str, Any]):
-		return cls(d["key"], d["aid"])
-
 	def __init__(self, key: AppKey, aid: AID):
 		super().__init__(key)
 		self.aid = aid
@@ -351,15 +359,6 @@ class AppSecurityMaterial(TransportSecurityMaterial):
 
 
 class DeviceSecurityMaterial(TransportSecurityMaterial):
-	def to_dict(self) -> Dict[str, DeviceKey]:
-		return {
-			"key": cast(DeviceKey, self.key)
-		}
-
-	@classmethod
-	def from_dict(cls, d: Dict[str, DeviceKey]):
-		return cls(d["key"])
-
 	def __init__(self, key: DeviceKey):
 		super().__init__(key)
 
@@ -376,13 +375,13 @@ class DeviceSecurityMaterial(TransportSecurityMaterial):
 
 
 class NetworkSecurityMaterial(SecurityMaterial):
-	__slots__ = "network_id", "nid", "net_key", "encryption_key", "privacy_key", "identity_key", "beacon_key"
+	__slots__ = "network_id", "nid", "encryption_key", "privacy_key", "identity_key", "beacon_key"
 
 	def __init__(self, network_id: NetworkID, nid: NID, net_key: NetworkKey, encryption_key: EncryptionKey,
 				 privacy_key: PrivacyKey, identity_key: IdentityKey, beacon_key: BeaconKey):
+		super().__init__(net_key)
 		self.network_id = network_id
 		self.nid = nid
-		self.net_key = net_key
 		self.encryption_key = encryption_key
 		self.privacy_key = privacy_key
 		self.identity_key = identity_key
@@ -391,6 +390,7 @@ class NetworkSecurityMaterial(SecurityMaterial):
 	@classmethod
 	def from_key(cls, network_key: NetworkKey) -> 'NetworkSecurityMaterial':
 		return network_key.security_material()
+
 
 
 def aes_ecb_encrypt(key: Key, clear_text: bytes) -> bytes:
