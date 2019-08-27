@@ -28,7 +28,7 @@ class PDU:
 			return 32
 
 	def _bytes_to_encrypt(self) -> bytes:
-		return self.dst.to_bytes(2, byteorder="big") + self.transport_pdu
+		return self.dst.to_bytes_endian("big") + self.transport_pdu
 
 	def encrypt(self, key: crypto.EncryptionKey, iv_index: crypto.IVIndex) -> Tuple[bytes, MIC]:
 		self.ivi = iv_index.ivi()
@@ -58,7 +58,7 @@ class PDU:
 		privacy_random = encrypted_dst_trans_pdu + net_mic.bytes_be
 		pecb = self.pecb(privacy_key, iv_index, privacy_random)
 		return privacy_random, xor_bytes(
-			struct.pack("!B3sH", (self.ctl << 7 | self.ttl), seq_bytes(self.seq), self.src), pecb[0:5])
+			struct.pack("!B3sH", (self.ctl << 7 | self.ttl.value), seq_bytes(self.seq), self.src), pecb[0:5])
 
 	@classmethod
 	def deobfuscate(cls, b: bytes, privacy_key: crypto.PrivacyKey, iv_index: IVIndex) -> Tuple[

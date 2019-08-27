@@ -12,17 +12,20 @@ LinkID = NewType("LinkID", int)
 
 
 class AdvBearer(prov.ProvisionerBearer, bearer.Bearer, ABC):
-	def recv_pb_adv(self, pb_adv: bytes):
-		pass
+	__slots__ = "ack_pb_adv", "recv_pb_adv"
+
+	def __init__(self):
+		super().__init__()
+		self.ack_pb_adv: Optional[Callable[[], None]] = None
+		self.recv_pb_adv: Optional[Callable[[bytes, ], None]] = None
+
 
 	def send_pb_adv(self, pb_adv_pdu: bytes, repeat: Optional[bool] = False):
 		raise NotImplementedError()
 
-	def ack_pb_adv(self):
-		pass
-
 	def stop_adv(self):
 		raise NotImplementedError()
+
 
 class AdvPDU:
 	STRUCT = struct.Struct("!LB")
@@ -44,14 +47,13 @@ class AdvPDU:
 		pdu = pb_generic.GenericProvisioningPDU.from_bytes(b[cls.STRUCT.size:])
 		return cls(link_id, transaction_number, pdu)
 
-class Link(prov.ProvisionerBearer):
 
+class Link(prov.ProvisionerBearer):
 	GENERIC_PROV_MTU = 24
 	RETRANSMISSION_TRIES = 10
 	RETRANSMISSION_DELAY = .25
 	START_LINK_ID = LinkID(0x00000000)
 	END_LINK_ID = LinkID(0xFFFFFFFF)
-
 
 	@classmethod
 	def mtu(cls) -> int:
@@ -80,7 +82,7 @@ class Link(prov.ProvisionerBearer):
 		self.device_uuid = device_uuid
 		self.link_id = link_id
 		self.transaction_number = self.START_TRANSACTION_NUMBER
-		self.link_bearer = None  # type: bearer.AdvBearer
+		self.link_bearer = None  # type: Optional[bearer.AdvBearer]
 		self.is_open = False
 		self.incoming_adv_pdus = queue.Queue()
 		self.process_incoming_adv_pdus_thread = threading.Thread(target=self.process_incoming_adv_pdu_worker)
@@ -116,7 +118,8 @@ class Link(prov.ProvisionerBearer):
 	def send_adv(self, pdu: AdvPDU, repeat: Optional[bool] = False):
 		self.link_bearer.send_pb_adv(pdu.to_bytes(), repeat)
 
-	def send_with_retries(self, pdus: List[AdvPDU], retries: int = None, link_ack: bool = False, transaction_ack: bool = False):
+	def send_with_retries(self, pdus: List[AdvPDU], retries: int = None, link_ack: bool = False,
+						  transaction_ack: bool = False):
 		self.link_acked = False
 		self.message_did_ack = False
 		if not retries:
@@ -159,13 +162,12 @@ class Link(prov.ProvisionerBearer):
 		gpcf = adv_pdu.generic_prov_pdu.gpcf()
 		print(f"GPCF: {gpcf} trans#: {adv_pdu.transaction_number}")
 		if gpcf == pb_generic.GPCF.PROVISIONING_BEARER_CONTROL:
-			opcode = adv_pdu.generic_prov_pdu.opcode # type: pb_generic.BearerControlOpcode
+			opcode = adv_pdu.generic_prov_pdu.opcode  # type: pb_generic.BearerControlOpcode
 			if opcode == pb_generic.BearerControlOpcode.LinkACK:
 				self.handle_link_ack(adv_pdu.transaction_number, adv_pdu.generic_prov_pdu)
 		else:
 			adv_pdu.generic_prov_pdu.transaction_number = adv_pdu.transaction_number
 			self.recv_generic_prov_pdu(adv_pdu.generic_prov_pdu)
-
 
 	def recv_pb_adv_pdu(self, incoming_pdu: bytes):
 		pdu = AdvPDU.from_bytes(incoming_pdu)

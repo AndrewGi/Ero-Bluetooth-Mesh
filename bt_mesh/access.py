@@ -2,16 +2,9 @@ from typing import *
 from .mesh import *
 import struct
 
-ModelID = NewType("ModelID", int)
-
-
-class ModelIdentifier:
-	__slots__ = "company_id", "model_id"
-
-	def __init__(self, company_id: CompanyID, model_id: ModelID):
-		self.company_id = company_id
-		self.model_id = model_id
-
+class ModelID(U16):
+	byteorder = "little"
+	pass
 
 ACK_TIMEOUT = 30  # 30 seconds is minimum act timeout
 
@@ -23,7 +16,7 @@ class Opcode:
 		if company_id is None:
 			if opcode < 0b01111111:
 				self.opcode = opcode  # One octet
-			elif 0b01111111 < opcode < 0b0100000000000000:
+			elif 0b01111111 < opcode < 0b1100_0000_0000_0000:
 				self.opcode = opcode
 			else:
 				raise ValueError(f"invalid opcode {opcode}")
@@ -75,7 +68,10 @@ class ModelIdentifier:
 		self.company_id = company_id
 
 	def to_bytes(self) -> bytes:
-		return self.STRUCT.pack(self.company_id, self.model_id)
+		if self.company_id:
+			return self.STRUCT.pack(self.company_id, self.model_id)
+		else:
+			return self.model_id.to_bytes()
 
 	@classmethod
 	def from_bytes(cls, b: bytes):

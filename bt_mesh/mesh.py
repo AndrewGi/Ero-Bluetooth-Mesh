@@ -1,9 +1,7 @@
 from typing import *
 from enum import IntEnum, IntFlag, Enum
 from uuid import UUID
-from . import crypto
 from .serialize import *
-
 
 class KeyIndex(U16):
 	INDEX_LEN = 12
@@ -32,7 +30,9 @@ class AppKeyIndex(KeyIndex):
 	pass
 
 
-CompanyID = NewType("CompanyID", U16)
+class CompanyID(U16):
+	byteorder = "little"
+
 SIGCompanyID = CompanyID(0)
 
 ProductID = NewType("ProductID", U16)
@@ -96,7 +96,7 @@ class TTL(U8):
 			raise ValueError(f"ttl too high: {ttl}")
 
 
-class Address(int):
+class Address(U16):
 	MAX_ADDRESS = 0xFFFF
 
 	def __init__(self, addr: int):
@@ -121,14 +121,17 @@ class UnicastAddress(Address):
 
 class VirtualAddress(Address):
 	__slots__ = "uuid",
-	SALT = crypto.s1("vtad")
+
+	VIRTUAL_AES_CMAC: Callable[[UUID,], bytes]
 
 	def addr(self) -> Address:
-		return Address(int.from_bytes(crypto.aes_cmac(self.SALT, self.uuid.bytes)[14:15], byteorder="big") | 0x8000)
+		if not self.VIRTUAL_AES_CMAC:
+			raise ValueError("missing virtual aes cmac (did you import crypto?)")
+		return Address(int.from_bytes(self.VIRTUAL_AES_CMAC(self.uuid)[14:15], byteorder="big") | 0x8000)
 
 	def __init__(self, uuid: UUID):
 		self.uuid = uuid
-		super().__init__(self.addr())
+		super().__init__(self.addr().value)
 
 
 class TransmitParameters:
@@ -141,6 +144,9 @@ class TransmitParameters:
 	@classmethod
 	def default(cls) -> 'TransmitParameters':
 		return cls(5, 100)
+
+class TransactionNumber(U8):
+	pass
 
 
 class RetransmitParameters(ByteSerializable):
@@ -175,21 +181,7 @@ class Features(IntFlag):
 	LowPower = 8
 
 
+
+
 class LocationDescriptor:
 	pass
-
-
-class SensorDescriptor:
-	PropertyID = NewType("PropertyID", int)
-	__slots__ = ('property_id', 'positive_tolerance', 'negative_tolerance', 'sample_function', 'measurement_period'
-																							   'update_interval')
-
-	def __init__(self, property_id: PropertyID, positive_tolerance: int, negative_tolerance: int,
-				 sample_function: int,
-				 measurement_period: int, update_interval: int):
-		self.property_id = property_id
-		self.positive_tolerance = positive_tolerance
-		self.negative_tolerance = negative_tolerance
-		self.sample_function = sample_function
-		self.measurement_period = measurement_period
-		self.update_interval = update_interval

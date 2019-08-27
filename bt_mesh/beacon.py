@@ -2,6 +2,7 @@ import struct
 from uuid import UUID
 import datetime
 import enum
+from typing import *
 
 
 class BeaconType(enum.IntEnum):
@@ -10,6 +11,8 @@ class BeaconType(enum.IntEnum):
 
 
 beacon_classes = dict()  # type: Dict[BeaconType, type]
+
+
 class Beacon:
 	__slots__ = "beacon_type",
 
@@ -28,7 +31,7 @@ class Beacon:
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'Beacon':
-		return cls.beacon_classes[BeaconType(b[0])](b[1:])
+		return beacon_classes[BeaconType(b[0])].beacon_from_bytes(b[1:])
 
 
 class SecureBeacon(Beacon):
@@ -37,7 +40,7 @@ class SecureBeacon(Beacon):
 
 
 class UnprovisionedBeacon(Beacon):
-	STRUCT = struct.Struct("!16pH")
+	STRUCT = struct.Struct("!16sH")
 	__slots__ = "oob", "dev_uuid", "uri_hash", "last_seen"
 
 	def __init__(self, oob: bytes, dev_uuid: UUID, uri_hash: bytes, last_seen: datetime.datetime):
@@ -49,7 +52,7 @@ class UnprovisionedBeacon(Beacon):
 
 	@classmethod
 	def beacon_from_bytes(cls, b: bytes) -> 'UnprovisionedBeacon':
-		uuid_bytes, oob = cls.STRUCT.unpack(b)
+		uuid_bytes, oob = cls.STRUCT.unpack(b[:cls.STRUCT.size])
 		if len(b) > cls.STRUCT.size:
 			uri_hash = b[cls.STRUCT.size:]
 		else:

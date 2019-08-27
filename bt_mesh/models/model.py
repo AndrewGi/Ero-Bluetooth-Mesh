@@ -1,9 +1,9 @@
 from abc import ABC
 
-from .mesh import *
-from . import access
-from .access import ModelID
-from .foundation import PublishPeriod
+from ..mesh import *
+from .. import access, foundation
+from ..access import ModelID
+from threading import Condition
 
 class ModelMessage(ByteSerializable, ABC):
 	pass
@@ -23,7 +23,7 @@ class EmptyModelMessage(ModelMessage):
 		return cls()
 
 
-HandlerCallable = Callable[Optional[ModelMessage], access.AccessMessage]
+HandlerCallable = Callable[[Optional[ModelMessage],], access.AccessMessage]
 
 
 class MessageHandler:
@@ -35,13 +35,14 @@ class MessageHandler:
 
 
 class Model:
-	__slots__ = "company_id", "model_id", "handlers", "states"
+	__slots__ = "company_id", "model_id", "handlers", "states", "publication"
 
 	def __init__(self, model_id: ModelID, company_id: Optional[CompanyID] = SIGCompanyID) -> None:
 		self.model_id = model_id
 		self.company_id = company_id
 		self.handlers: Dict[access.Opcode, HandlerCallable] = dict()
 		self.states: List['State'] = list()
+		self.publication: Optional[foundation.ModelPublication] = None
 
 	def add_handler(self, opcode: access.Opcode, callback: HandlerCallable) -> None:
 		if opcode in self.handlers.values():
@@ -53,8 +54,12 @@ class Model:
 			self.add_handler(opcode, handler)
 		self.states.append(state)
 
+	def access_send(self, msg: access.AccessMessage) -> None:
+		pass
+
 	def publish(self, opcode: access.Opcode, msg: ModelMessage) -> None:
-		raise NotImplementedError("this is my job")
+		access.AccessMessage(self.publication.element_address, self.publication.publish_address, self.publication.publish_ttl,
+							 opcode, msg.to_bytes(), self.publication.app_key_index, self.publication.net_key_index)
 
 
 class ModelServer(Model):
@@ -132,7 +137,12 @@ class StatusStateClient(State, ABC):
 	def __init__(self, status_opcode: access.Opcode):
 		super().__init__()
 		self.status_opcode = status_opcode
+		self.status_condition = Condition()
 		self.add_handler(status_opcode, self.on_status)
+
+	def status_handler(self, msg: access.AccessMessage) -> None:
+		self.on_status(msg)
+		self.status_condition.notify_all()
 
 	def on_status(self, msg: access.AccessMessage) -> None:
 		raise NotImplementedError()
@@ -174,20 +184,7 @@ class SetStateServer(StatusStateServer, ABC):
 
 
 class SetStateClient(GetStateClient, ABC):
-	def __init__(self, status_opcode: access.Opcode, get_opcode: access.Opcode, set_ack_opcode: Optional[access.Opcode],
-				 set_no_ack_opcode: Optional[access.Opcode]) -> None:
-		if set_ack_opcode is None and set_no_ack_opcode is None:
-			raise ValueError("no opcodes given")
-		super().__init__(status_opcode, get_opcode)
-		self.set_ack_opcode = set_ack_opcode
-		self.set_no_ack_opcode = set_no_ack_opcode
-
 	def set(self, value: Any, ack: Optional[bool] = True) -> None:
 		raise NotImplementedError()
 
-	def request_set_ack(self, request: ModelMessage) -> None:
-		self.publish(self.set_ack_opcode, request)
-
-	def request_set_no_ack(self, request: ModelMessage) -> None:
-		self.publish(self.set_no_ack_opcode, request)
 

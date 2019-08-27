@@ -395,7 +395,7 @@ class SegmentAssembler:
 
 
 class Reassemblers:
-	__slots__ = "contexts",
+	__slots__ = "contexts"
 
 	def __init__(self):
 		self.contexts: Dict[SegmentSrc, SegmentAssembler] = dict()
@@ -408,7 +408,6 @@ class Reassemblers:
 		if seg_src not in self.contexts:
 			if pdu.seg_o == 0:
 				self.contexts[seg_src] = SegmentAssembler(src, pdu)
-
 				return
 			else:
 				# TODO: Allow reassembly out of order
@@ -427,7 +426,7 @@ class Reassemblers:
 
 
 class SegmentedMessage:
-	__slots__ = "pdus", "block_ack", "seg_n", "timer_thread", "ttl", "retransmit", "send_event"
+	__slots__ = "pdus", "block_ack", "seg_n", "ttl", "retransmit"
 
 	def __init__(self, pdus: List[LowerSegmentedPDU], ttl: Optional[TTL] = 10, retransmit: Optional[int] = 3):
 		self.pdus = pdus
@@ -435,8 +434,6 @@ class SegmentedMessage:
 		self.block_ack = BlockAck(0, self.seg_n)
 		self.ttl = ttl
 		self.retransmit = retransmit
-		self.send_event = threading.Event()
-		self.timer_thread = threading.Thread(target=self._timer_func)
 
 	def cancel(self) -> None:
 		self.retransmit = 0
@@ -477,7 +474,7 @@ class SegmentedMessage:
 		pass
 
 	def interval(self) -> int:
-		return 200 * 50 * self.ttl
+		return 200 * 50 * self.ttl.value
 
 	def get_unacked(self) -> Generator[LowerSegmentedPDU, None, None]:
 		for i in self.block_ack.get_unacked_pdu_indexes():

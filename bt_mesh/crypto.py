@@ -58,8 +58,8 @@ class NetworkNonce(Nonce):
 		self.iv_index = iv_index
 
 	def as_be_bytes(self) -> bytes:
-		ctl_ttl = (self.ctl << 7) | self.ttl
-		return self.STRUCT.pack(self.nonce_type, ctl_ttl, seq_bytes(self.seq), self.src, self.iv_index.index)
+		ctl_ttl = (self.ctl << 7) | self.ttl.value
+		return self.STRUCT.pack(self.nonce_type, ctl_ttl, seq_bytes(self.seq), self.src, self.iv_index)
 
 
 class ApplicationNonce(Nonce):
@@ -76,7 +76,7 @@ class ApplicationNonce(Nonce):
 
 	def as_be_bytes(self) -> bytes:
 		return self.STRUCT.pack(self.nonce_type, self.aszmic << 7, seq_bytes(self.seq), self.src, self.dst,
-								self.iv_index.index)
+								self.iv_index)
 
 
 class DeviceNonce(Nonce):
@@ -309,23 +309,11 @@ def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_da
 		raise InvalidMIC()
 
 
-class SecurityMaterial(ABC, ByteSerializable):
+class SecurityMaterial(ABC):
 	__slots__ = "key"
 
 	def __init__(self, key: Key):
 		self.key = key
-
-	def to_bytes(self) -> bytes:
-		return self.key.to_bytes()
-
-	@classmethod
-	def from_bytes(cls, b: bytes) -> 'SecurityMaterial':
-		return cls(Key.from_bytes(b))
-
-	def to_bytes(self) -> bytes:
-		return self.key.to_bytes()
-
-
 
 
 class TransportSecurityMaterial(SecurityMaterial, ABC):
@@ -392,7 +380,6 @@ class NetworkSecurityMaterial(SecurityMaterial):
 		return network_key.security_material()
 
 
-
 def aes_ecb_encrypt(key: Key, clear_text: bytes) -> bytes:
 	encryptor = Cipher(algorithms.AES(key=key.key_bytes), ECB(), default_backend()).encryptor()  # type: CipherContext
 	encryptor.update(clear_text)
@@ -409,7 +396,7 @@ def s1(m: Union[bytes, str]) -> Salt:
 	assert m, "m can not be empty"
 	if isinstance(m, str):
 		m = m.encode()
-	return Salt(aes_cmac(Key(b'\x00' * Key.KEY_LEN), m))
+	return Salt(aes_cmac(Key(bytearray(b'\x00' * Key.KEY_LEN)), m))
 
 
 def k1(salt: Salt, key: Key, info: bytes) -> MAC:
@@ -491,14 +478,9 @@ class KeyIndexSlot(Serializable):
 		return {
 			"index": self.index,
 			"phase": self.phase,
-			"new": self.new.to_dict(),
-			"old": self.old.to_dict()
+			"new_key": self.new.key.hex() if self.new else None,
+			"old_key": self.old.key.hex()
 		}
-
-	@classmethod
-	def from_dict(cls, d: Dict[str, Any]) -> 'KeyIndexSlot':
-		return cls(index=d["index"], phase=d["phase"],
-				   new=SecurityMaterial.from_dict(d["new"]), old=SecurityMaterial.from_dict(d["old"]))
 
 
 class AppKeyIndexSlot(KeyIndexSlot):
@@ -519,6 +501,13 @@ class AppKeyIndexSlot(KeyIndexSlot):
 		if new and new.aid == aid:
 			yield new
 
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]) -> 'AppKeyIndexSlot':
+		new = None if d["new"] is None else AppSecurityMaterial.from_key(AppKey.from_hex(d["new"]))
+
+		return cls(index=AppKeyIndex(d["index"]), phase=KeyRefreshPhase(d["phase"]),
+				   new=new, old=AppSecurityMaterial.from_key(AppKey.from_hex(d["old"])))
+
 
 class NetKeyIndexSlot(KeyIndexSlot):
 	def __init__(self, index: NetKeyIndex, old: NetworkSecurityMaterial, new: Optional[NetworkSecurityMaterial] = None,
@@ -533,7 +522,9 @@ class NetKeyIndexSlot(KeyIndexSlot):
 		return cast(NetworkSecurityMaterial, super().tx_sm())
 
 	def rx_sms(self) -> Tuple[NetKeyIndex, NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]]:
-		return (self.index,) + cast(Tuple[NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]], super().rx_sms())
+		netkey = cast(NetKeyIndex, self.index)
+		sms = cast(Tuple[NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]], super().rx_sms())
+		return (netkey,) + sms
 
 	def rx_by_nid(self, nid: NID) -> Generator[NetworkSecurityMaterial, None, None]:
 		_index, old, new = self.rx_sms()
@@ -541,6 +532,13 @@ class NetKeyIndexSlot(KeyIndexSlot):
 			yield old
 		if new and new.nid == nid:
 			yield new
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]) -> 'NetKeyIndexSlot':
+		new = None if d["new"] is None else NetworkSecurityMaterial.from_key(NetworkKey.from_hex(d["new"]))
+		return cls(index=NetKeyIndex(d["index"]), phase=KeyRefreshPhase(d["phase"]),
+				   new=new,
+				   old=NetworkSecurityMaterial.from_key(NetworkKey.from_hex(d["old"])))
 
 
 class GlobalContext(Serializable):
@@ -552,6 +550,7 @@ class GlobalContext(Serializable):
 		self.iv_index = iv_index
 		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
 		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
+		self.nets[NetKeyIndex(0)] = primary_net
 
 	@classmethod
 	def new(cls) -> 'GlobalContext':
@@ -567,12 +566,12 @@ class GlobalContext(Serializable):
 	def add_app(self, slot: AppKeyIndexSlot):
 		if slot.index in self.apps:
 			raise ValueError(f"app key index {slot.index} already exists")
-		self.apps[slot.index] = slot
+		self.apps[cast(AppKeyIndex, slot.index)] = slot
 
 	def add_net(self, slot: NetKeyIndexSlot):
 		if slot.index in self.nets:
 			raise ValueError(f"net key index {slot.index} already exists")
-		self.nets[slot.index] = slot
+		self.nets[cast(NetKeyIndex, slot.index)] = slot
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
@@ -583,15 +582,22 @@ class GlobalContext(Serializable):
 
 	@classmethod
 	def from_dict(cls, d: Dict[str, Any]):
+		primary = NetKeyIndexSlot.from_dict(d["nets"][0])
+		context = cls(IVIndex(d["iv_index"]), primary)
+		for raw_net in d["nets"][1:]:
+			net = NetKeyIndexSlot.from_dict(raw_net)
+			context.nets[cast(NetKeyIndex, net.index)] = net
 
-		cls(IVIndex(d["iv_index"]))
+		for raw_app in d["apps"]:
+			app = AppKeyIndexSlot.from_dict(raw_app)
+			context.apps[cast(AppKeyIndex, app.index)] = app
 
-	def get_nid_rx_keys(self, nid: NID) -> Generator[[NetKeyIndex, NetworkSecurityMaterial], None, None]:
+	def get_nid_rx_keys(self, nid: NID) -> Generator[Tuple[NetKeyIndex, NetworkSecurityMaterial], None, None]:
 		for slot in self.nets.values():
 			for rx_key in slot.rx_by_nid(nid):
 				yield slot.index, rx_key
 
-	def get_aid_rx_keys(self, aid: AID) -> Generator[[AppKeyIndex, AppSecurityMaterial], None, None]:
+	def get_aid_rx_keys(self, aid: AID) -> Generator[Tuple[AppKeyIndex, AppSecurityMaterial], None, None]:
 		for slot in self.apps.values():
 			for rx_key in slot.rx_by_aid(aid):
 				yield slot.index, rx_key
@@ -616,3 +622,13 @@ class LocalContext:
 
 	def seq_inc(self):
 		self.seq += 1
+
+
+VIRTUAL_SALT = s1("vtad")
+
+
+def virtual_aes_cmac(uuid: UUID) -> bytes:
+	return aes_cmac(VIRTUAL_SALT, uuid.bytes)
+
+
+VirtualAddress.VIRTUAL_AES_CMAC = virtual_aes_cmac

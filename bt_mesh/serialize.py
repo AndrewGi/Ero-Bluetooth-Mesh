@@ -45,7 +45,10 @@ class Integer(ByteSerializable):
 		return self.signed
 
 	def to_bytes(self) -> bytes:
-		return self.value.to_bytes(self.length, self.byteorder)
+		return self.to_bytes_endian(self.byteorder)
+
+	def to_bytes_endian(self, byteorder: str) -> bytes:
+		return self.value.to_bytes(self.length, byteorder)
 
 	def set_bit(self, bit_index: int) -> None:
 		if not 0 <= bit_index < self.length * 8:

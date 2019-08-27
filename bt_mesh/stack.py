@@ -1,6 +1,6 @@
 from queue import Queue
 from .mesh import *
-from . import bearer, crypto, net, access, transport, beacon, replay, prov
+from . import bearer, crypto, net, access, transport, beacon, replay, model
 
 
 class MessageContext:
@@ -196,6 +196,8 @@ class Stack:
 
 	def send_access_message(self, msg: access.AccessMessage):
 		net_sm = cast(crypto.NetworkSecurityMaterial, self.global_context.get_net(msg.netkey_index).tx_sm())
+		encrypted_access = self.encrypt_access()
+
 		pdus = [pdu for pdu in self.access_network_pdus(msg, net_sm)]  # we update SEQ here so we want to do it fast
 		for pdu in pdus:
 			self.send_network_pdu(pdu, net_sm.encryption_key)
