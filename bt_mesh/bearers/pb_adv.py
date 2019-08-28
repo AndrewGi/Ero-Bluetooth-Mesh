@@ -43,7 +43,7 @@ class AdvPDU:
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'AdvPDU':
-		link_id, transaction_number = cls.STRUCT.unpack(b[:5])
+		link_id, transaction_number = cls.STRUCT.unpack(b[:cls.STRUCT.size])
 		pdu = pb_generic.GenericProvisioningPDU.from_bytes(b[cls.STRUCT.size:])
 		return cls(link_id, transaction_number, pdu)
 
@@ -82,7 +82,7 @@ class Link(prov.ProvisionerBearer):
 		self.device_uuid = device_uuid
 		self.link_id = link_id
 		self.transaction_number = self.START_TRANSACTION_NUMBER
-		self.link_bearer = None  # type: Optional[bearer.AdvBearer]
+		self.link_bearer = None  # type: Optional[AdvBearer]
 		self.is_open = False
 		self.incoming_adv_pdus = queue.Queue()
 		self.process_incoming_adv_pdus_thread = threading.Thread(target=self.process_incoming_adv_pdu_worker)
@@ -162,9 +162,10 @@ class Link(prov.ProvisionerBearer):
 		gpcf = adv_pdu.generic_prov_pdu.gpcf()
 		print(f"GPCF: {gpcf} trans#: {adv_pdu.transaction_number}")
 		if gpcf == pb_generic.GPCF.PROVISIONING_BEARER_CONTROL:
-			opcode = adv_pdu.generic_prov_pdu.opcode  # type: pb_generic.BearerControlOpcode
+			bearer_control = cast(pb_generic.BearerControlPDU, adv_pdu.generic_prov_pdu)
+			opcode = bearer_control.opcode  # type: pb_generic.BearerControlOpcode
 			if opcode == pb_generic.BearerControlOpcode.LinkACK:
-				self.handle_link_ack(adv_pdu.transaction_number, adv_pdu.generic_prov_pdu)
+				self.handle_link_ack(adv_pdu.transaction_number, cast(pb_generic.TransactionAckPDU, bearer_control.payload()))
 		else:
 			adv_pdu.generic_prov_pdu.transaction_number = adv_pdu.transaction_number
 			self.recv_generic_prov_pdu(adv_pdu.generic_prov_pdu)

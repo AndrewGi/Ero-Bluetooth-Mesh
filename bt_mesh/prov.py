@@ -46,7 +46,7 @@ class PDU:
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'PDU':
-		pdu_type = PDUType(b[0] >> 2)
+		pdu_type = PDUType(b[0] & 0x3F)
 		return pdu_classes[pdu_type].parameters_from_bytes(b[1:])
 
 
@@ -65,7 +65,7 @@ class Invite(PDU):
 		return cls(b[0])
 
 
-class Algorithms(enum.IntEnum):
+class Algorithms(enum.IntFlag):
 	FIPSP256 = 0
 
 	def check_enabled(self, algorithm: 'Algorithms'):
@@ -121,7 +121,8 @@ class Capabilities(PDU):
 
 	@classmethod
 	def parameters_from_bytes(cls, b: bytes) -> 'Capabilities':
-		return cls(*cls.STRUCT.unpack(b))
+		num_elems, algo, pub_key, static_oob, out_oob_size, out_oob_action, input_oob_size, input_oob_action = cls.STRUCT.unpack(b)
+		return cls(num_elems, Algorithms(algo), pub_key, static_oob, OOBSize(out_oob_size), OutputOOBAction(out_oob_action), OOBSize(input_oob_size), InputOOBAction(input_oob_action))
 
 
 class PublicKey(enum.IntEnum):
@@ -144,7 +145,7 @@ class Start(PDU):
 	__slots__ = "algorithm", "public_key", "authentication_method", "authentication_action", "authentication_size"
 
 	def __init__(self, algorithm: Algorithms, public_key: PublicKey, authentication_method: AuthenticationMethod,
-				 authentication_action: AuthenticationMethod, authentication_size: OOBSize):
+				 authentication_action: AuthenticationAction, authentication_size: OOBSize):
 		super().__init__(PDUType.Start)
 		self.algorithm = algorithm
 		self.public_key = public_key
@@ -169,11 +170,11 @@ class PublicKeyPDU(PDU):
 		self.public_key = public_key
 
 	def parameters_to_bytes(self) -> bytes:
-		return struct.pack("32s32s", self.public_key.x, self.public_key.y)
+		return struct.pack("!32s32s", self.public_key.x.to_bytes(32, "big"), self.public_key.y.to_bytes(32, "big"))
 
 	@classmethod
 	def parameters_from_bytes(cls, b: bytes) -> 'PublicKeyPDU':
-		x, y = struct.unpack("32s32s", b)
+		x, y = struct.unpack("!32s32s", b)
 		return cls(crypto.ECCKeyPoint(x, y))
 
 
@@ -325,6 +326,7 @@ pdu_classes[PDUType.Failed] = Failed
 
 
 def segment_pdu(pdu: PDU, max_mtu: int) -> Generator[pb_generic.GenericProvisioningPDU, None, None]:
+	max_mtu -= 3 # TODO: FIX
 	pdu_bytes = pdu.to_bytes()
 	start_data_size = max_mtu - pb_generic.TransactionStartPDU.control_pdu_size()
 	if start_data_size < 1:
@@ -419,7 +421,7 @@ class ProvisionerBearer:
 		self.transaction_assembler = None  # type: Optional[Reassembler]
 		self.transaction_number = self.START_TRANSACTION_NUMBER
 		self.incoming_transaction_number = self.END_TRANSACTION_NUMBER + 1
-		self.recv_prov_pdu: Optional[Callable[[PDU,], None]] = None
+		self.recv_prov_pdu: Optional[Callable[[PDU, ], None]] = None
 
 	def open(self):
 		raise NotImplementedError()
@@ -445,8 +447,6 @@ class ProvisionerBearer:
 
 	def send_prov_pdu(self, pdu: PDU):
 		self.send_generic_prov_pdus(segment_pdu(pdu, self.mtu()))
-
-
 
 	def send_generic_prov_pdus(self, pdus: Iterator[pb_generic.GenericProvisioningPDU]):
 		raise NotImplementedError()
@@ -513,7 +513,7 @@ ConfirmationDevice = NewType("ConfirmationDevice", bytes)
 
 class ConfirmationKey(crypto.Key):
 	def __init__(self, key_bytes: bytes):
-		super().__init__(key_bytes)
+		super().__init__(bytearray(key_bytes))
 
 	def confirm_provisioner(self, random_prov: bytes, auth_value: AuthValue) -> ConfirmationProvisioner:
 		return ConfirmationProvisioner(crypto.aes_cmac(self, random_prov + auth_value.to_bytes()))
@@ -593,8 +593,8 @@ class UnprovisionedDevice:
 		self.algorithm = None  # type: Optional[Algorithms]
 		self.public_key_option = PublicKey.NoOOB
 		self.get_device_key_oob = None  # type: Optional[Callable[UnprovisionedDevice, PublicKeyPDU]]
-		self.auth_method = OutputOOBAction.NoAction
-		self.auth_action = OutputOOBAction.NoAction
+		self.auth_method: AuthenticationMethod = AuthenticationMethod.NoOOB
+		self.auth_action: AuthenticationAction = OutputOOBAction.NoAction
 		self.auth_size = OOBSize(0)
 		self.auth_value = AuthValue.no_oob()
 		self.private_key = None  # type: Optional[crypto.ECCPrivateKey]
@@ -619,7 +619,7 @@ class UnprovisionedDevice:
 		self.primary_address = None  # type: Optional[mesh.UnicastAddress]
 		self.done = False
 		self.device_key = None  # type: Optional[crypto.DeviceKey]
-		self.session_key = None # type: Optional[crypto.SessionKey]
+		self.session_key = None  # type: Optional[crypto.SessionKey]
 		self.session_nonce = None  # type : Optional[crypto.SessionNonce]
 
 	def _opened_event(self):
@@ -788,6 +788,7 @@ class UnprovisionedDevice:
 			self._get_oob_public_key()
 
 	def handle_capabilities(self, pdu: Capabilities):
+		print("CAPABILTIES!")
 		self.capabilities = pdu
 		self.confirmation_packets.prov_capabilities = pdu
 		self.worker_queue.put(ProvisioningEvent.Capabilities)
@@ -798,6 +799,7 @@ class UnprovisionedDevice:
 		self.worker_queue.put(ProvisioningEvent.DevicePublicKey)
 
 	def recv_pdu(self, pdu: PDU):
+		print(pdu.pdu_type)
 		self.last_seen = datetime.datetime.now()
 		if pdu.pdu_type == PDUType.Capabilities:
 			self.handle_capabilities(cast(Capabilities, pdu))
@@ -863,7 +865,7 @@ class UnprovisionedDevicesCollection:
 	def __init__(self, timeout=DEFAULT_TIMEOUT):
 		self.unprovisioned_devices = list()  # type: List[UnprovisionedDevice]
 		self.timeout = timeout
-		self.on_new_device: Optional[Callable[[UnprovisionedDevice,], None]] = None
+		self.on_new_device: Optional[Callable[[UnprovisionedDevice, ], None]] = None
 
 	def add_new_device(self, new_beacon: beacon.UnprovisionedBeacon) -> None:
 		new_device = UnprovisionedDevice(new_beacon)

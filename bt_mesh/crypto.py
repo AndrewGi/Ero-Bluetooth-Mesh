@@ -247,13 +247,13 @@ class ECCPublicKey:
 	__slots__ = "public_key"
 
 	def __init__(self, public_key: ec.EllipticCurvePublicKey):
-		if public_key.curve != ec_curve:
-			raise ValueError("public key not NIST-256 key")
+		if public_key.curve.name != ec_curve.name:
+			raise ValueError(f"public key not NIST-256 key ({public_key.curve.name})")
 		self.public_key = public_key
 
 	@property
 	def point(self) -> ECCKeyPoint:
-		if self.public_key.curve != ec_curve:
+		if self.public_key.curve.name != ec_curve.name:
 			raise ValueError("public key not NIST-256 key")
 		nums = self.public_key.public_numbers()  # type: ec.EllipticCurvePublicNumbers
 		return ECCKeyPoint(x=nums.x, y=nums.y)

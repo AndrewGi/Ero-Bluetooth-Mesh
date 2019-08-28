@@ -97,8 +97,9 @@ class GenericProvisioningPDU:
 	def from_bytes(cls, b: bytes) -> 'GenericProvisioningPDU':
 		gpcf = GPCF(b[0] & 0x03)
 		gpcf_cls = GPCF_classes[gpcf]
-		control_bytes = b[:gpcf_cls.control_pdu_size()]
-		payload = b[gpcf_cls.control_pdu_size():]
+		control_pdu_size = gpcf_cls.control_pdu_size() if gpcf_cls.control_pdu_size() > 0 else len(b)
+		control_bytes = b[:control_pdu_size]
+		payload = b[control_pdu_size:]
 		out = gpcf_cls.control_from_bytes(control_bytes)
 		if payload:
 			out.set_payload(payload)
@@ -150,6 +151,7 @@ class TransactionStartPDU(GenericProvisioningPDU):
 class TransactionAckPDU(GenericProvisioningPDU):
 
 	def __init__(self, transaction_number: int = None):
+		super().__init__()
 		self.transaction_number = transaction_number
 
 	@classmethod
@@ -175,7 +177,7 @@ class TransactionContinuationPDU(GenericProvisioningPDU):
 
 	def __init__(self, segment_index: int, segment_data: bytes):
 		super().__init__()
-		if self.segment_index > 2 ** 6:
+		if segment_index > 2 ** 6:
 			raise ValueError(f"segment_index too high {segment_index}")
 		self.segment_data = segment_data
 		self.segment_index = segment_index
@@ -221,7 +223,7 @@ class BearerControlPDU(GenericProvisioningPDU):
 
 	@classmethod
 	def control_pdu_size(cls) -> int:
-		return 1
+		return -1
 
 	def bearer_to_bytes(self) -> bytes:
 		raise NotImplementedError()
@@ -233,6 +235,7 @@ class BearerControlPDU(GenericProvisioningPDU):
 	@classmethod
 	def control_from_bytes(cls, b: bytes) -> 'BearerControlPDU':
 		opcode = BearerControlOpcode(b[0] >> 2)
+		print(f"opcode: {opcode} b: {b}")
 		return bearer_control_opcode_classes[opcode].bearer_from_bytes(b[1:])
 
 	@staticmethod
@@ -250,7 +253,7 @@ class LinkOpenMessage(BearerControlPDU):
 
 	@classmethod
 	def bearer_from_bytes(cls, b: bytes) -> 'LinkOpenMessage':
-		return cls(UUID(bytes=b))
+		return cls(UUID(bytes=b[1:]))
 
 	def bearer_to_bytes(self) -> bytes:
 		return self.dev_uuid.bytes
@@ -286,7 +289,7 @@ class LinkCloseMessage(BearerControlPDU):
 
 	@classmethod
 	def bearer_from_bytes(cls, b: bytes) -> 'LinkCloseMessage':
-		return cls(LinkCloseReason(b[0]))
+		return cls(LinkCloseReason(b[1]))
 
 	def bearer_to_bytes(self) -> bytes:
 		return bytes([self.reason])
