@@ -4,7 +4,7 @@
 
 Built in bearer is using a slightly modifier [Bleson](https://github.com/TheCellule/python-bleson) library for the advertising bearer layer. So far only tested on Linux. OSX untested and Windows 10 doesn't seem like it sets the advertising data correctly.
 
-See better_mesh_ctl.py for a (broken) example. View the stack.py to see how the different layers are being connected
+See provision_cli.py for an example on provision and the stack
 
 This is a learning experience for me so there may be some big inconsistences as I from terrible at python to slightly better.
 
