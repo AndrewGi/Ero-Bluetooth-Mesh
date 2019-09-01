@@ -109,12 +109,9 @@ class GenericProvisioningPDU:
 class TransactionStartPDU(GenericProvisioningPDU):
 	__slots__ = "seg_n", "length", "fcs", "data"
 
-	def __init__(self, seg_n: int, length: int, fcs: int = None, data: bytes = None):
+	def __init__(self, seg_n: int, length: int, fcs: int, data: Optional[bytes] = None):
 		super().__init__()
-		if data is not None and fcs is None:
-			self.fcs = fcs_calc(data)
-		else:
-			self.fcs = fcs
+		self.fcs = fcs
 		self.data = data
 		self.seg_n = seg_n
 		self.length = length
@@ -122,12 +119,7 @@ class TransactionStartPDU(GenericProvisioningPDU):
 	def payload(self) -> bytes:
 		return self.data
 
-	def set_payload(self, payload: bytes, check_fcs: bool = True, set_fcs: bool = False):
-		if check_fcs:
-			if not fcs_check(self.fcs, payload):
-				raise ValueError("invalid fcs")
-		elif set_fcs:
-			self.fcs = fcs_calc(payload)
+	def set_payload(self, payload: bytes):
 		self.data = payload
 
 	@classmethod
@@ -175,7 +167,7 @@ class TransactionContinuationPDU(GenericProvisioningPDU):
 	LEN = 1
 	__slots__ = "segment_index", "segment_data"
 
-	def __init__(self, segment_index: int, segment_data: bytes):
+	def __init__(self, segment_index: int, segment_data: Optional[bytes] = None):
 		super().__init__()
 		if segment_index > 2 ** 6:
 			raise ValueError(f"segment_index too high {segment_index}")
@@ -185,18 +177,21 @@ class TransactionContinuationPDU(GenericProvisioningPDU):
 	def payload(self) -> bytes:
 		return self.segment_data
 
+	def set_payload(self, payload: bytes) -> None:
+		self.segment_data = payload
+
 	def control_to_bytes(self) -> bytes:
-		return bytes([(self.segment_index << 2) | GPCF.TRANSACTION_CONTINUE])
+		return bytes([(self.segment_index << 2)| GPCF.TRANSACTION_CONTINUE])
 
 	@classmethod
 	def control_from_bytes(cls, b: bytes) -> 'TransactionContinuationPDU':
-		return cls(b[0] << 2, b[1:])
+		return cls(b[0] >> 2, b[1:])
 
 	@classmethod
 	def control_pdu_size(cls) -> int:
-		return 2
+		return 1
 
-	@staticmethod
+	@staticmethod3
 	def gpcf() -> GPCF:
 		return GPCF.TRANSACTION_CONTINUE
 
@@ -289,7 +284,7 @@ class LinkCloseMessage(BearerControlPDU):
 
 	@classmethod
 	def bearer_from_bytes(cls, b: bytes) -> 'LinkCloseMessage':
-		return cls(LinkCloseReason(b[1]))
+		return cls(LinkCloseReason(b[0]))
 
 	def bearer_to_bytes(self) -> bytes:
 		return bytes([self.reason])

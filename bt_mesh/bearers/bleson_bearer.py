@@ -49,6 +49,7 @@ class BlesonBearer(pb_adv.AdvBearer):
 				time.sleep((parameters.steps - 1)*.1)
 
 	def _send_adv(self, advertisement: bleson.Advertisement, repeat: Optional[bool] = False):
+		advertisement.flags = None
 		with self.adapter_lock:
 			if repeat:
 				self.adapter.start_advertising(advertisement)

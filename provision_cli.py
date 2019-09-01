@@ -1,5 +1,5 @@
 from uuid import UUID
-
+import sys
 if __name__ == "__main__":
 	from bt_mesh import mesh, prov, beacon
 	from bt_mesh.config import config_client
@@ -21,10 +21,16 @@ class Session:
 		self.bearer.recv_beacon = self.handle_beacon
 		self.provisioner = prov.Provisioner()
 		self.provisioner.unprovisioned_devices.on_new_device = self.on_new_device
+		self.provision_all = False
 		self.running = True
 
 	def on_new_device(self, new_device: prov.UnprovisionedDevice) -> None:
 		self.print(f"new device! {new_device.device_uuid}")
+		if self.provision_all:
+			self.provision(new_device.device_uuid)
+
+	def on_provision_failed(self, device: prov.UnprovisionedDevice) -> None:
+		self.print(f"provisioned failed for {device.device_uuid}")
 
 	def handle_beacon(self, new_beacon: beacon.Beacon) -> None:
 		if new_beacon.beacon_type == beacon.BeaconType.UnprovisionedDevice:
@@ -36,6 +42,7 @@ class Session:
 	def provision(self, uuid: UUID) -> None:
 		self.print(f"provisioning {uuid}...")
 		device = self.provisioner.unprovisioned_devices.get(uuid)
+		device.failed_callback = self.on_provision_failed
 		Link.set_link(device, self.bearer)
 		self.provisioner.provision(uuid)
 		with device.event_condition:
@@ -67,14 +74,14 @@ class CLIHandler:
 
 
 class ConfigCLI(CLIHandler):
-	def __init__(self, session: Session):
+	def __init__(self, session: Session) -> None:
 		super().__init__(session)
 		self.configure_client = config_client.ConfigClient()
 
-	def relay_get(self):
+	def relay_get(self) -> None:
 		self.configure_client.relay.request_get()
 		self.configure_client.relay.status_condition.wait()
-		print(self.configure_client.relay.state)
+		self.session.print(self.configure_client.relay.state)
 
 	def cli_relay(self, args: List[str]):
 		assert len(args) == 0
@@ -89,6 +96,8 @@ def main() -> None:
 
 	bearer = bleson_bearer.BlesonBearer()
 	session = Session(bearer)
+	if sys.argv[1] == "-pall":
+		session.provision_all = True
 	print("ready")
 	while session.running:
 		line = input()

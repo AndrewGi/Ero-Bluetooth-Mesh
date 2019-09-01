@@ -121,11 +121,13 @@ class Capabilities(PDU):
 
 	@classmethod
 	def parameters_from_bytes(cls, b: bytes) -> 'Capabilities':
-		num_elems, algo, pub_key, static_oob, out_oob_size, out_oob_action, input_oob_size, input_oob_action = cls.STRUCT.unpack(b)
-		return cls(num_elems, Algorithms(algo), pub_key, static_oob, OOBSize(out_oob_size), OutputOOBAction(out_oob_action), OOBSize(input_oob_size), InputOOBAction(input_oob_action))
+		num_elems, algo, pub_key, static_oob, out_oob_size, out_oob_action, input_oob_size, input_oob_action = cls.STRUCT.unpack(
+			b)
+		return cls(num_elems, Algorithms(algo), pub_key, static_oob, OOBSize(out_oob_size),
+				   OutputOOBAction(out_oob_action), OOBSize(input_oob_size), InputOOBAction(input_oob_action))
 
 
-class PublicKey(enum.IntEnum):
+class PublicKeyOption(enum.IntEnum):
 	NoOOB = 0
 	YesOOB = 1
 
@@ -144,7 +146,7 @@ class Start(PDU):
 	STRUCT = struct.Struct("!BBBBB")
 	__slots__ = "algorithm", "public_key", "authentication_method", "authentication_action", "authentication_size"
 
-	def __init__(self, algorithm: Algorithms, public_key: PublicKey, authentication_method: AuthenticationMethod,
+	def __init__(self, algorithm: Algorithms, public_key: PublicKeyOption, authentication_method: AuthenticationMethod,
 				 authentication_action: AuthenticationAction, authentication_size: OOBSize):
 		super().__init__(PDUType.Start)
 		self.algorithm = algorithm
@@ -316,7 +318,7 @@ class Failed(PDU):
 pdu_classes[PDUType.Invite] = Invite
 pdu_classes[PDUType.Capabilities] = Capabilities
 pdu_classes[PDUType.Start] = Start
-pdu_classes[PDUType.PublicKey] = PublicKey
+pdu_classes[PDUType.PublicKey] = PublicKeyPDU
 pdu_classes[PDUType.InputComplete] = InputComplete
 pdu_classes[PDUType.Confirmation] = Confirmation
 pdu_classes[PDUType.Random] = Random
@@ -326,22 +328,22 @@ pdu_classes[PDUType.Failed] = Failed
 
 
 def segment_pdu(pdu: PDU, max_mtu: int) -> Generator[pb_generic.GenericProvisioningPDU, None, None]:
-	max_mtu -= 3 # TODO: FIX
 	pdu_bytes = pdu.to_bytes()
 	start_data_size = max_mtu - pb_generic.TransactionStartPDU.control_pdu_size()
 	if start_data_size < 1:
 		raise ValueError("MTU too small")
 
 	max_continue_data_size = max_mtu - pb_generic.TransactionContinuationPDU.control_pdu_size()
-	seg_n = math.ceil((len(pdu_bytes) - start_data_size) / max_continue_data_size)
+	seg_n = (len(pdu_bytes) - start_data_size) // max_continue_data_size if len(pdu_bytes) > start_data_size else 0
+	if start_data_size + max_continue_data_size * seg_n < len(pdu_bytes):
+		seg_n += 1
 	start_data_size = len(pdu_bytes) if start_data_size > len(pdu_bytes) else start_data_size
-	yield pb_generic.TransactionStartPDU(seg_n, len(pdu_bytes), data=pdu_bytes[:start_data_size])
+	fcs = pb_generic.fcs_calc(pdu_bytes)
+	yield pb_generic.TransactionStartPDU(seg_n, len(pdu_bytes), fcs, pdu_bytes[:start_data_size])
 	for seg_i in range(seg_n):
 		start_i = start_data_size + seg_i * max_continue_data_size
 		end_i = start_i + max_continue_data_size
-		if end_i > len(pdu_bytes):
-			end_i = len(pdu_bytes)
-		yield pb_generic.TransactionContinuationPDU(seg_i, pdu_bytes[start_i:end_i])
+		yield pb_generic.TransactionContinuationPDU(seg_i + 1, pdu_bytes[start_i:end_i])
 
 
 class Reassembler:
@@ -379,7 +381,7 @@ class Reassembler:
 				raise ValueError("transaction continue pdu too small")
 		pos = self.seg_pos(seg_i)
 		if pos + len(data) > self.total_length:
-			raise ValueError("data out of bounds")
+			raise ValueError(f"data out of bounds. seg_i: {seg_i} pos: {pos} data_len: {len(data)} expect_total: {self.total_length}")
 		for i in range(len(data)):
 			self.data[i + pos] = data[i]
 		self.segs_needed = self.segs_needed & (~(1 << seg_i) & self.seg_mask)
@@ -401,7 +403,7 @@ class Reassembler:
 		if pdu.gpcf() == pb_generic.GPCF.TRANSACTION_START:
 			self.insert_segment(0, pdu.payload())
 		else:
-			self.insert_segment(pdu.seg_n, pdu.payload())
+			self.insert_segment(cast(pb_generic.TransactionContinuationPDU, pdu).segment_index, pdu.payload())
 
 	def is_done(self) -> bool:
 		print(f"segs needed : {bin(self.segs_needed)}")
@@ -591,7 +593,7 @@ class UnprovisionedDevice:
 		self.worker = threading.Thread(target=self.worker_func)
 		self.worker.start()
 		self.algorithm = None  # type: Optional[Algorithms]
-		self.public_key_option = PublicKey.NoOOB
+		self.public_key_option = PublicKeyOption.NoOOB
 		self.get_device_key_oob = None  # type: Optional[Callable[UnprovisionedDevice, PublicKeyPDU]]
 		self.auth_method: AuthenticationMethod = AuthenticationMethod.NoOOB
 		self.auth_action: AuthenticationAction = OutputOOBAction.NoAction
@@ -620,7 +622,9 @@ class UnprovisionedDevice:
 		self.done = False
 		self.device_key = None  # type: Optional[crypto.DeviceKey]
 		self.session_key = None  # type: Optional[crypto.SessionKey]
-		self.session_nonce = None  # type : Optional[crypto.SessionNonce]
+		self.session_nonce = None  # type: Optional[crypto.SessionNonce]
+		self.failed_code = None  # type: Optional[ErrorCode]
+		self.failed_callback = None  # type: Optional[Callable[[UnprovisionedDevice,], None]]
 
 	def _opened_event(self):
 		self.worker_queue.put(ProvisioningEvent.Connected)
@@ -773,7 +777,7 @@ class UnprovisionedDevice:
 		self.pb_bearer.send_prov_pdu(self.prov_random)
 
 	def _get_oob_public_key(self) -> None:
-		if self.public_key_option == PublicKey.NoOOB:
+		if self.public_key_option == PublicKeyOption.NoOOB:
 			raise ValueError("public key option is NoOOB")
 		if self.get_device_key_oob is None:
 			raise ValueError("no get_device_key_oob function define")
@@ -784,7 +788,7 @@ class UnprovisionedDevice:
 		pdu = PublicKeyPDU(self.private_key.public_key().point)
 		self.confirmation_packets.prov_public_key = pdu
 		self.pb_bearer.send_prov_pdu(pdu)
-		if self.public_key_option == PublicKey.YesOOB:
+		if self.public_key_option == PublicKeyOption.YesOOB:
 			self._get_oob_public_key()
 
 	def handle_capabilities(self, pdu: Capabilities):
@@ -820,6 +824,14 @@ class UnprovisionedDevice:
 		if pdu.pdu_type == PDUType.Complete:
 			self.handle_complete()
 			return
+
+		if pdu.pdu_type == PDUType.Failed:
+			self.handle_failed(cast(Failed, pdu).error_code)
+
+	def handle_failed(self, error_code: ErrorCode) -> None:
+		self.failed_code = error_code
+		if self.failed_callback:
+			self.failed_callback(self)
 
 	def handle_complete(self) -> None:
 		self.done = True

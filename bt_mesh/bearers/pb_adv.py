@@ -28,6 +28,7 @@ class AdvBearer(prov.ProvisionerBearer, bearer.Bearer, ABC):
 
 
 class AdvPDU:
+	MTU = 29
 	STRUCT = struct.Struct("!LB")
 	__slots__ = "link_id", "transaction_number", "generic_prov_pdu"
 
@@ -38,8 +39,11 @@ class AdvPDU:
 		self.generic_prov_pdu = generic_prov_pdu
 
 	def to_bytes(self) -> bytes:
-		return self.link_id.to_bytes(4, byteorder="big") + self.transaction_number.to_bytes(1,
+		b = self.link_id.to_bytes(4, byteorder="big") + self.transaction_number.to_bytes(1,
 																							byteorder="big") + self.generic_prov_pdu.to_bytes()
+		if len(b)>self.MTU:
+			raise ValueError(f"adv mtu {self.MTU} > {len(b)}")
+		return b
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'AdvPDU':
@@ -84,6 +88,7 @@ class Link(prov.ProvisionerBearer):
 		self.transaction_number = self.START_TRANSACTION_NUMBER
 		self.link_bearer = None  # type: Optional[AdvBearer]
 		self.is_open = False
+		self.accept_incoming = True
 		self.incoming_adv_pdus = queue.Queue()
 		self.process_incoming_adv_pdus_thread = threading.Thread(target=self.process_incoming_adv_pdu_worker)
 		self.process_incoming_adv_pdus_thread.start()
@@ -171,6 +176,9 @@ class Link(prov.ProvisionerBearer):
 			self.recv_generic_prov_pdu(adv_pdu.generic_prov_pdu)
 
 	def recv_pb_adv_pdu(self, incoming_pdu: bytes):
+		if not self.accept_incoming:
+			# link closed
+			return
 		pdu = AdvPDU.from_bytes(incoming_pdu)
 		if pdu.link_id != self.link_id:
 			# link id doesn't match this link
@@ -181,6 +189,8 @@ class Link(prov.ProvisionerBearer):
 		if not self.is_open:
 			raise RuntimeError("link already close")
 		self.send_adv(self.new_pdu(pb_generic.LinkCloseMessage(reason)))
+		self.is_open = False
+		self.accept_incoming = False
 
 	def link_ack(self, transaction_number: prov.TransactionNumber):
 		self.send_adv(self.new_pdu(pb_generic.LinkAckMessage(), transaction_number=transaction_number))
