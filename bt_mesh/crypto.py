@@ -111,7 +111,7 @@ class ProxyNonce(Nonce):
 
 
 class Key(ByteSerializable):
-	KEY_LEN = 16
+	KEY_LEN: int = 16
 	__slots__ = 'key_bytes',
 
 	def __init__(self, key_bytes: bytearray):
@@ -236,6 +236,8 @@ class ECCKeyPoint:
 	__slots__ = "x", "y",
 
 	def __init__(self, x: int, y: int):
+		assert isinstance(x, int)
+		assert isinstance(y, int)
 		self.x = x
 		self.y = y
 
@@ -264,6 +266,7 @@ class ECCPublicKey:
 
 
 class ECDHSharedSecret(Key):
+	KEY_LEN = 32
 	def __init__(self, secret_bytes: bytearray):
 		super().__init__(secret_bytes)
 
@@ -282,6 +285,7 @@ class ECCPrivateKey:
 		return cls(ec.generate_private_key(ec_curve, default_backend()))
 
 	def make_shared_secret(self, peer_public: ECCPublicKey) -> ECDHSharedSecret:
+		assert isinstance(peer_public, ECCPublicKey)
 		return ECDHSharedSecret(self.private_key.exchange(ec.ECDH(), peer_public.public_key))
 
 

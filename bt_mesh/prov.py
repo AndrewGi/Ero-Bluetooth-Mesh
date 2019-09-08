@@ -176,8 +176,9 @@ class PublicKeyPDU(PDU):
 
 	@classmethod
 	def parameters_from_bytes(cls, b: bytes) -> 'PublicKeyPDU':
+		print(f"public_key: {b.hex()}")
 		x, y = struct.unpack("!32s32s", b)
-		return cls(crypto.ECCKeyPoint(x, y))
+		return cls(crypto.ECCKeyPoint(int.from_bytes(x, byteorder="big"), int.from_bytes(y, byteorder="big")))
 
 
 class InputComplete(PDU):
@@ -354,7 +355,7 @@ class Reassembler:
 		self.start_seg_len = mtu - pb_generic.TransactionStartPDU.control_pdu_size()
 		self.continue_seg_len = mtu - pb_generic.TransactionContinuationPDU.control_pdu_size()
 		self.seg_n = seg_n
-		self.seg_mask = (2 ** self.seg_n) - 1
+		self.seg_mask = (2 ** (self.seg_n + 1)) - 1
 		self.segs_needed = self.seg_mask
 		self.transaction_number = transaction_number
 		self.data = bytearray(total_length)
@@ -436,7 +437,6 @@ class ProvisionerBearer:
 			return self.message_ack_cv.wait(timeout)
 
 	def message_ackked(self):
-		print("MESSAGE ACKED")
 		self.message_did_ack = True
 		self.transaction_number = TransactionNumber(self.transaction_number + 1)
 		if self.transaction_number > self.END_TRANSACTION_NUMBER:
@@ -454,7 +454,6 @@ class ProvisionerBearer:
 		raise NotImplementedError()
 
 	def handle_transaction_start(self, start_pdu: pb_generic.TransactionStartPDU):
-		print(f"START {start_pdu.transaction_number}")
 		if self.transaction_assembler and self.transaction_assembler.transaction_number == start_pdu.transaction_number:
 			return  # we already started this transaction
 		if start_pdu.transaction_number != 0 and start_pdu.transaction_number < self.incoming_transaction_number:
@@ -559,7 +558,9 @@ class ConfirmationPackets:
 		return self.prov_invite.to_bytes() + self.prov_capabilities.to_bytes() + self.prov_start.to_bytes() + self.prov_public_key.to_bytes() + self.device_public_key.to_bytes()
 
 	def confirmation_salt(self) -> ConfirmationSalt:
-		return ConfirmationSalt(crypto.s1(self.confirmation_input()))
+		inp = self.confirmation_input()
+		print("input: "+ inp.hex())
+		return ConfirmationSalt(crypto.s1(inp))
 
 
 # the numbers don't matter
@@ -573,11 +574,10 @@ class ProvisioningEvent(enum.IntEnum):
 	DevicePublicKey = 7
 	SendProvPublicKey = 8
 	Authenticate = 9
-	DeviceRandom = 10
-	ProvisionerRandom = 11
-	DeviceConfirmation = 12
-	Distribute = 13
-	Done = 14
+	ProvisionerRandom = 10
+	DeviceConfirmation = 11
+	Distribute = 12
+	Done = 13
 
 
 class UnprovisionedDevice:
@@ -792,13 +792,12 @@ class UnprovisionedDevice:
 			self._get_oob_public_key()
 
 	def handle_capabilities(self, pdu: Capabilities):
-		print("CAPABILTIES!")
 		self.capabilities = pdu
 		self.confirmation_packets.prov_capabilities = pdu
 		self.worker_queue.put(ProvisioningEvent.Capabilities)
 
 	def handle_public_key(self, pdu: PublicKeyPDU):
-		self.device_public_key = pdu.public_key
+		self.device_public_key = crypto.ECCPublicKey.from_point(pdu.public_key)
 		self.confirmation_packets.device_public_key = pdu
 		self.worker_queue.put(ProvisioningEvent.DevicePublicKey)
 
@@ -843,7 +842,7 @@ class UnprovisionedDevice:
 
 	def handle_confirmation(self, confirmation: Confirmation) -> None:
 		self.device_confirmation = confirmation.cmac
-		self.worker_queue.put(ProvisioningEvent.DeviceRandom)
+		self.worker_queue.put(ProvisioningEvent.ProvisionerRandom)
 
 	def set_bearer(self, pb_bearer: ProvisionerBearer):
 		self.pb_bearer = pb_bearer

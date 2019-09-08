@@ -28,7 +28,7 @@ class AdvBearer(prov.ProvisionerBearer, bearer.Bearer, ABC):
 
 
 class AdvPDU:
-	MTU = 29
+	MTU = 29 # maybe actually 27?
 	STRUCT = struct.Struct("!LB")
 	__slots__ = "link_id", "transaction_number", "generic_prov_pdu"
 

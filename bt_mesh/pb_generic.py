@@ -191,7 +191,7 @@ class TransactionContinuationPDU(GenericProvisioningPDU):
 	def control_pdu_size(cls) -> int:
 		return 1
 
-	@staticmethod3
+	@staticmethod
 	def gpcf() -> GPCF:
 		return GPCF.TRANSACTION_CONTINUE
 
