@@ -1,13 +1,38 @@
 from typing import *
 from enum import IntEnum, IntFlag, Enum
 from uuid import UUID
-from . import crypto
 from .serialize import *
-KeyIndex = NewType("NetIndex", int)
-NetKeyIndex = NewType("NetKeyIndex", KeyIndex)
-AppKeyIndex = NewType("AppKeyIndex", KeyIndex)
 
-CompanyID = NewType("CompanyID", U16)
+class KeyIndex(U16):
+	INDEX_LEN = 12
+	byteorder = "little"
+
+	def join(self, other: 'KeyIndex') -> bytes:
+		index_0 = self.value
+		index_1 = other.value
+		return U24(index_0 | (index_1 << self.INDEX_LEN)).to_bytes()
+
+	@classmethod
+	def unjoin(cls, b: bytes) -> Tuple['KeyIndex', 'KeyIndex']:
+		if len(b) != 2:
+			raise ValueError(f"expected 2 bytes got {len(b)}")
+		both_indexes = U24.from_bytes(b)
+		key_mask = (1 << cls.INDEX_LEN) - 1
+		index_0 = both_indexes.value & key_mask
+		index_1 = (both_indexes.value >> cls.INDEX_LEN) & key_mask
+		return KeyIndex(index_0), KeyIndex(index_1)
+
+class NetKeyIndex(KeyIndex):
+	pass
+
+
+class AppKeyIndex(KeyIndex):
+	pass
+
+
+class CompanyID(U16):
+	byteorder = "little"
+
 SIGCompanyID = CompanyID(0)
 
 ProductID = NewType("ProductID", U16)
@@ -18,6 +43,7 @@ AID = NewType("AID", int)
 Seq = NewType("Seq", int)
 SeqAuth = NewType("SeqAuth", int)
 SeqZero = NewType("SeqZero", int)
+
 
 def seq_bytes(seq: Seq):
 	return seq.to_bytes(3, byteorder="big")
@@ -75,14 +101,13 @@ class TTL(U8):
 			raise ValueError(f"ttl too high: {ttl}")
 
 
-class Address(int):
+class Address(U16):
 	MAX_ADDRESS = 0xFFFF
 
 	def __init__(self, addr: int):
 		if addr > self.MAX_ADDRESS:
 			raise ValueError(f"address higher than allowed 16 bit range {addr:x}")
 		super().__init__(addr)
-
 
 
 class GroupAddress(Address):
@@ -101,14 +126,17 @@ class UnicastAddress(Address):
 
 class VirtualAddress(Address):
 	__slots__ = "uuid",
-	SALT = crypto.s1("vtad")
+
+	VIRTUAL_AES_CMAC: Callable[[UUID,], bytes]
 
 	def addr(self) -> Address:
-		return Address(int.from_bytes(crypto.aes_cmac(self.SALT, self.uuid.bytes)[14:15], byteorder="big") | 0x8000)
+		if not self.VIRTUAL_AES_CMAC:
+			raise ValueError("missing virtual aes cmac (did you import crypto?)")
+		return Address(int.from_bytes(self.VIRTUAL_AES_CMAC(self.uuid)[14:15], byteorder="big") | 0x8000)
 
 	def __init__(self, uuid: UUID):
 		self.uuid = uuid
-		super().__init__(self.addr())
+		super().__init__(self.addr().value)
 
 
 class TransmitParameters:
@@ -122,6 +150,10 @@ class TransmitParameters:
 	def default(cls) -> 'TransmitParameters':
 		return cls(5, 100)
 
+class TransactionNumber(U8):
+	pass
+
+
 class RetransmitParameters(ByteSerializable):
 	__slots__ = "count", "steps"
 
@@ -134,7 +166,7 @@ class RetransmitParameters(ByteSerializable):
 		self.steps = steps
 
 	def interval_ms(self) -> int:
-		return 50 * (self.count+1)
+		return 50 * (self.count + 1)
 
 	def to_bytes(self) -> bytes:
 		return U8(self.count | (self.steps << 3)).to_bytes()
@@ -146,6 +178,7 @@ class RetransmitParameters(ByteSerializable):
 		steps = (v >> 3) & 0x1F
 		return cls(count=count, steps=steps)
 
+
 class Features(IntFlag):
 	Relay = 1
 	Proxy = 2
@@ -153,20 +186,7 @@ class Features(IntFlag):
 	LowPower = 8
 
 
+
+
 class LocationDescriptor:
 	pass
-
-class SensorDescriptor:
-	PropertyID = NewType("PropertyID", int)
-	__slots__ = ('property_id', 'positive_tolerance', 'negative_tolerance', 'sample_function', 'measurement_period'
-																							   'update_interval')
-
-	def __init__(self, property_id: PropertyID, positive_tolerance: int, negative_tolerance: int,
-				 sample_function: int,
-				 measurement_period: int, update_interval: int):
-		self.property_id = property_id
-		self.positive_tolerance = positive_tolerance
-		self.negative_tolerance = negative_tolerance
-		self.sample_function = sample_function
-		self.measurement_period = measurement_period
-		self.update_interval = update_interval

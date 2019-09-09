@@ -382,8 +382,8 @@ class Advertisement(ValueObject):
         self.uri    =   None        # unit8
         self.mfg_data = None        # unit8
         self.rssi = rssi            # really only part of an Advertisement Report...
-        self.beacon_payload = network_pdu # type: bytes
-        self.network_pdu = None # type: bytes
+        self.beacon_payload = None # type: bytes
+        self.network_pdu = network_pdu # type: bytes
         self.pb_adv_pdu = pb_adv_pdu # type: bytes
 
         self.raw_data = raw_data

@@ -58,8 +58,8 @@ class NetworkNonce(Nonce):
 		self.iv_index = iv_index
 
 	def as_be_bytes(self) -> bytes:
-		ctl_ttl = (self.ctl << 7) | self.ttl
-		return self.STRUCT.pack(self.nonce_type, ctl_ttl, seq_bytes(self.seq), self.src, self.iv_index.index)
+		ctl_ttl = (self.ctl << 7) | self.ttl.value
+		return self.STRUCT.pack(self.nonce_type, ctl_ttl, seq_bytes(self.seq), self.src, self.iv_index)
 
 
 class ApplicationNonce(Nonce):
@@ -76,7 +76,7 @@ class ApplicationNonce(Nonce):
 
 	def as_be_bytes(self) -> bytes:
 		return self.STRUCT.pack(self.nonce_type, self.aszmic << 7, seq_bytes(self.seq), self.src, self.dst,
-								self.iv_index.index)
+								self.iv_index)
 
 
 class DeviceNonce(Nonce):
@@ -110,8 +110,8 @@ class ProxyNonce(Nonce):
 		return self.STRUCT.pack(self.nonce_type, seq_bytes(self.seq), self.src, self.iv_index)
 
 
-class Key:
-	KEY_LEN = 16
+class Key(ByteSerializable):
+	KEY_LEN: int = 16
 	__slots__ = 'key_bytes',
 
 	def __init__(self, key_bytes: bytearray):
@@ -144,7 +144,14 @@ class Key:
 
 	@classmethod
 	def _random_key(cls) -> 'Key':
-		return cls(os.urandom(cls.KEY_LEN))
+		return cls(bytearray(os.urandom(cls.KEY_LEN)))
+
+	def to_bytes(self) -> bytes:
+		return self.key_bytes
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'Key':
+		return cls(bytearray(b))
 
 
 class AppKey(Key):
@@ -169,7 +176,7 @@ class BeaconKey(Key):
 	pass
 
 
-class SessionNonce(Nonce):
+class SessionNonce(Nonce, ABC):
 	__slots__ = "nonce",
 
 	def __init__(self, nonce: bytes):
@@ -229,6 +236,8 @@ class ECCKeyPoint:
 	__slots__ = "x", "y",
 
 	def __init__(self, x: int, y: int):
+		assert isinstance(x, int)
+		assert isinstance(y, int)
 		self.x = x
 		self.y = y
 
@@ -240,13 +249,13 @@ class ECCPublicKey:
 	__slots__ = "public_key"
 
 	def __init__(self, public_key: ec.EllipticCurvePublicKey):
-		if public_key.curve != ec_curve:
-			raise ValueError("public key not NIST-256 key")
+		if public_key.curve.name != ec_curve.name:
+			raise ValueError(f"public key not NIST-256 key ({public_key.curve.name})")
 		self.public_key = public_key
 
 	@property
 	def point(self) -> ECCKeyPoint:
-		if self.public_key.curve != ec_curve:
+		if self.public_key.curve.name != ec_curve.name:
 			raise ValueError("public key not NIST-256 key")
 		nums = self.public_key.public_numbers()  # type: ec.EllipticCurvePublicNumbers
 		return ECCKeyPoint(x=nums.x, y=nums.y)
@@ -257,7 +266,8 @@ class ECCPublicKey:
 
 
 class ECDHSharedSecret(Key):
-	def __init__(self, secret_bytes: bytes):
+	KEY_LEN = 32
+	def __init__(self, secret_bytes: bytearray):
 		super().__init__(secret_bytes)
 
 
@@ -275,6 +285,7 @@ class ECCPrivateKey:
 		return cls(ec.generate_private_key(ec_curve, default_backend()))
 
 	def make_shared_secret(self, peer_public: ECCPublicKey) -> ECDHSharedSecret:
+		assert isinstance(peer_public, ECCPublicKey)
 		return ECDHSharedSecret(self.private_key.exchange(ec.ECDH(), peer_public.public_key))
 
 
@@ -302,15 +313,14 @@ def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_da
 		raise InvalidMIC()
 
 
-class SecurityMaterial(Serializable, ABC):
-	pass
+class SecurityMaterial(ABC):
+	__slots__ = "key"
+
+	def __init__(self, key: Key):
+		self.key = key
 
 
 class TransportSecurityMaterial(SecurityMaterial, ABC):
-	__slots__ = "key"
-
-	def __init__(self, key: crypto.Key):
-		self.key = key
 
 	def aes_ccm_encrypt(self, nonce: Nonce, data: bytes, mic_len: Optional[int] = 32,
 						associated_data: Optional[bytes] = None) -> \
@@ -331,16 +341,6 @@ class TransportSecurityMaterial(SecurityMaterial, ABC):
 
 
 class AppSecurityMaterial(TransportSecurityMaterial):
-	def to_dict(self) -> Dict[str, Any]:
-		return {
-			"key": self.key,
-			"aid": self.aid
-		}
-
-	@classmethod
-	def from_dict(cls, d: Dict[str, Any]):
-		return cls(d["key"], d["aid"])
-
 	def __init__(self, key: AppKey, aid: AID):
 		super().__init__(key)
 		self.aid = aid
@@ -351,15 +351,6 @@ class AppSecurityMaterial(TransportSecurityMaterial):
 
 
 class DeviceSecurityMaterial(TransportSecurityMaterial):
-	def to_dict(self) -> Dict[str, DeviceKey]:
-		return {
-			"key": cast(DeviceKey, self.key)
-		}
-
-	@classmethod
-	def from_dict(cls, d: Dict[str, DeviceKey]):
-		return cls(d["key"])
-
 	def __init__(self, key: DeviceKey):
 		super().__init__(key)
 
@@ -376,10 +367,11 @@ class DeviceSecurityMaterial(TransportSecurityMaterial):
 
 
 class NetworkSecurityMaterial(SecurityMaterial):
-	__slots__ = "network_id", "nid", "net_key", "encryption_key", "privacy_key", "identity_key", "beacon_key"
+	__slots__ = "network_id", "nid", "encryption_key", "privacy_key", "identity_key", "beacon_key"
 
 	def __init__(self, network_id: NetworkID, nid: NID, net_key: NetworkKey, encryption_key: EncryptionKey,
 				 privacy_key: PrivacyKey, identity_key: IdentityKey, beacon_key: BeaconKey):
+		super().__init__(net_key)
 		self.network_id = network_id
 		self.nid = nid
 		self.net_key = net_key
@@ -491,14 +483,9 @@ class KeyIndexSlot(Serializable):
 		return {
 			"index": self.index,
 			"phase": self.phase,
-			"new": self.new.to_dict(),
-			"old": self.old.to_dict()
+			"new_key": self.new.key.hex() if self.new else None,
+			"old_key": self.old.key.hex()
 		}
-
-	@classmethod
-	def from_dict(cls, d: Dict[str, Any]) -> 'KeyIndexSlot':
-		return cls(index=d["index"], phase=d["phase"],
-				   new=SecurityMaterial.from_dict(d["new"]), old=SecurityMaterial.from_dict(d["old"]))
 
 
 class AppKeyIndexSlot(KeyIndexSlot):
@@ -519,6 +506,13 @@ class AppKeyIndexSlot(KeyIndexSlot):
 		if new and new.aid == aid:
 			yield new
 
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]) -> 'AppKeyIndexSlot':
+		new = None if d["new"] is None else AppSecurityMaterial.from_key(AppKey.from_hex(d["new"]))
+
+		return cls(index=AppKeyIndex(d["index"]), phase=KeyRefreshPhase(d["phase"]),
+				   new=new, old=AppSecurityMaterial.from_key(AppKey.from_hex(d["old"])))
+
 
 class NetKeyIndexSlot(KeyIndexSlot):
 	def __init__(self, index: NetKeyIndex, old: NetworkSecurityMaterial, new: Optional[NetworkSecurityMaterial] = None,
@@ -533,7 +527,9 @@ class NetKeyIndexSlot(KeyIndexSlot):
 		return cast(NetworkSecurityMaterial, super().tx_sm())
 
 	def rx_sms(self) -> Tuple[NetKeyIndex, NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]]:
-		return (self.index,) + cast(Tuple[NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]], super().rx_sms())
+		netkey = cast(NetKeyIndex, self.index)
+		sms = cast(Tuple[NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]], super().rx_sms())
+		return (netkey,) + sms
 
 	def rx_by_nid(self, nid: NID) -> Generator[NetworkSecurityMaterial, None, None]:
 		_index, old, new = self.rx_sms()
@@ -546,23 +542,17 @@ class NetKeyIndexSlot(KeyIndexSlot):
 class GlobalContext(Serializable):
 	__slots__ = "apps", "nets", "iv_index", "iv_updating"
 
-	def __init__(self, iv_index: IVIndex, nets: List[NetKeyIndexSlot], apps: List[AppKeyIndexSlot] = None,
-				 iv_updating: bool = False):
+	def __init__(self, iv_index: IVIndex, primary_net: NetKeyIndexSlot, iv_updating: bool = False):
+		if primary_net.index != 0:
+			raise ValueError(f"primary net key has to have index 0x0000 not 0x{primary_net.index:04X}")
 		self.iv_index = iv_index
 		self.iv_updating = iv_updating
 		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
-		for app in apps:
-			self.apps[app.index] = app
 		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
-		for net in nets:
-			self.nets[net.index] = net
-
-		if NetKeyIndex(0) not in self.nets.keys():
-			raise ValueError("missing primary net")
 
 	@classmethod
 	def new(cls) -> 'GlobalContext':
-		return cls(IVIndex(0), [NetKeyIndexSlot.new_primary(), ])
+		return cls(IVIndex(0), NetKeyIndexSlot.new_primary())
 
 	def get_iv_index(self, ivi: Optional[bool] = None) -> Optional[IVIndex]:
 		if not ivi:
@@ -598,18 +588,23 @@ class GlobalContext(Serializable):
 			"nets": [d.to_dict() for d in self.nets.values()]
 		}
 
-	@classmethod
-	def from_dict(cls, d: Dict[str, Any]) -> 'GlobalContext':
-		apps = [AppKeyIndexSlot.from_dict(app_d) for app_d in d["apps"]]
-		nets = [NetKeyIndexSlot.from_dict(net_d) for net_d in d["nets"]]
-		return cls(IVIndex(d["iv_index"]), nets, apps, d["iv_updating"])
+	def from_dict(cls, d: Dict[str, Any]):
+		primary = NetKeyIndexSlot.from_dict(d["nets"][0])
+		context = cls(IVIndex(d["iv_index"]), primary)
+		for raw_net in d["nets"][1:]:
+			net = NetKeyIndexSlot.from_dict(raw_net)
+			context.nets[cast(NetKeyIndex, net.index)] = net
 
-	def get_nid_rx_keys(self, nid: NID) -> Generator[[NetKeyIndex, NetworkSecurityMaterial], None, None]:
+		for raw_app in d["apps"]:
+			app = AppKeyIndexSlot.from_dict(raw_app)
+			context.apps[cast(AppKeyIndex, app.index)] = app
+
+	def get_nid_rx_keys(self, nid: NID) -> Generator[Tuple[NetKeyIndex, NetworkSecurityMaterial], None, None]:
 		for slot in self.nets.values():
 			for rx_key in slot.rx_by_nid(nid):
 				yield slot.index, rx_key
 
-	def get_aid_rx_keys(self, aid: AID) -> Generator[[AppKeyIndex, AppSecurityMaterial], None, None]:
+	def get_aid_rx_keys(self, aid: AID) -> Generator[Tuple[AppKeyIndex, AppSecurityMaterial], None, None]:
 		for slot in self.apps.values():
 			for rx_key in slot.rx_by_aid(aid):
 				yield slot.index, rx_key

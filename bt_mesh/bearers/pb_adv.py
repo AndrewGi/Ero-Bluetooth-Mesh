@@ -12,19 +12,23 @@ LinkID = NewType("LinkID", int)
 
 
 class AdvBearer(prov.ProvisionerBearer, bearer.Bearer, ABC):
-	def recv_pb_adv(self, pb_adv: bytes):
-		pass
+	__slots__ = "ack_pb_adv", "recv_pb_adv"
+
+	def __init__(self):
+		super().__init__()
+		self.ack_pb_adv: Optional[Callable[[], None]] = None
+		self.recv_pb_adv: Optional[Callable[[bytes, ], None]] = None
+
 
 	def send_pb_adv(self, pb_adv_pdu: bytes, repeat: Optional[bool] = False):
 		raise NotImplementedError()
 
-	def ack_pb_adv(self):
-		pass
-
 	def stop_adv(self):
 		raise NotImplementedError()
 
+
 class AdvPDU:
+	MTU = 29 # maybe actually 27?
 	STRUCT = struct.Struct("!LB")
 	__slots__ = "link_id", "transaction_number", "generic_prov_pdu"
 
@@ -35,23 +39,25 @@ class AdvPDU:
 		self.generic_prov_pdu = generic_prov_pdu
 
 	def to_bytes(self) -> bytes:
-		return self.link_id.to_bytes(4, byteorder="big") + self.transaction_number.to_bytes(1,
+		b = self.link_id.to_bytes(4, byteorder="big") + self.transaction_number.to_bytes(1,
 																							byteorder="big") + self.generic_prov_pdu.to_bytes()
+		if len(b)>self.MTU:
+			raise ValueError(f"adv mtu {self.MTU} > {len(b)}")
+		return b
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'AdvPDU':
-		link_id, transaction_number = cls.STRUCT.unpack(b[:5])
+		link_id, transaction_number = cls.STRUCT.unpack(b[:cls.STRUCT.size])
 		pdu = pb_generic.GenericProvisioningPDU.from_bytes(b[cls.STRUCT.size:])
 		return cls(link_id, transaction_number, pdu)
 
-class Link(prov.ProvisionerBearer):
 
+class Link(prov.ProvisionerBearer):
 	GENERIC_PROV_MTU = 24
 	RETRANSMISSION_TRIES = 10
 	RETRANSMISSION_DELAY = .25
 	START_LINK_ID = LinkID(0x00000000)
 	END_LINK_ID = LinkID(0xFFFFFFFF)
-
 
 	@classmethod
 	def mtu(cls) -> int:
@@ -80,8 +86,9 @@ class Link(prov.ProvisionerBearer):
 		self.device_uuid = device_uuid
 		self.link_id = link_id
 		self.transaction_number = self.START_TRANSACTION_NUMBER
-		self.link_bearer = None  # type: bearer.AdvBearer
+		self.link_bearer = None  # type: Optional[AdvBearer]
 		self.is_open = False
+		self.accept_incoming = True
 		self.incoming_adv_pdus = queue.Queue()
 		self.process_incoming_adv_pdus_thread = threading.Thread(target=self.process_incoming_adv_pdu_worker)
 		self.process_incoming_adv_pdus_thread.start()
@@ -116,7 +123,8 @@ class Link(prov.ProvisionerBearer):
 	def send_adv(self, pdu: AdvPDU, repeat: Optional[bool] = False):
 		self.link_bearer.send_pb_adv(pdu.to_bytes(), repeat)
 
-	def send_with_retries(self, pdus: List[AdvPDU], retries: int = None, link_ack: bool = False, transaction_ack: bool = False):
+	def send_with_retries(self, pdus: List[AdvPDU], retries: int = None, link_ack: bool = False,
+						  transaction_ack: bool = False):
 		self.link_acked = False
 		self.message_did_ack = False
 		if not retries:
@@ -159,15 +167,18 @@ class Link(prov.ProvisionerBearer):
 		gpcf = adv_pdu.generic_prov_pdu.gpcf()
 		print(f"GPCF: {gpcf} trans#: {adv_pdu.transaction_number}")
 		if gpcf == pb_generic.GPCF.PROVISIONING_BEARER_CONTROL:
-			opcode = adv_pdu.generic_prov_pdu.opcode # type: pb_generic.BearerControlOpcode
+			bearer_control = cast(pb_generic.BearerControlPDU, adv_pdu.generic_prov_pdu)
+			opcode = bearer_control.opcode  # type: pb_generic.BearerControlOpcode
 			if opcode == pb_generic.BearerControlOpcode.LinkACK:
-				self.handle_link_ack(adv_pdu.transaction_number, adv_pdu.generic_prov_pdu)
+				self.handle_link_ack(adv_pdu.transaction_number, cast(pb_generic.TransactionAckPDU, bearer_control.payload()))
 		else:
 			adv_pdu.generic_prov_pdu.transaction_number = adv_pdu.transaction_number
 			self.recv_generic_prov_pdu(adv_pdu.generic_prov_pdu)
 
-
 	def recv_pb_adv_pdu(self, incoming_pdu: bytes):
+		if not self.accept_incoming:
+			# link closed
+			return
 		pdu = AdvPDU.from_bytes(incoming_pdu)
 		if pdu.link_id != self.link_id:
 			# link id doesn't match this link
@@ -178,6 +189,8 @@ class Link(prov.ProvisionerBearer):
 		if not self.is_open:
 			raise RuntimeError("link already close")
 		self.send_adv(self.new_pdu(pb_generic.LinkCloseMessage(reason)))
+		self.is_open = False
+		self.accept_incoming = False
 
 	def link_ack(self, transaction_number: prov.TransactionNumber):
 		self.send_adv(self.new_pdu(pb_generic.LinkAckMessage(), transaction_number=transaction_number))

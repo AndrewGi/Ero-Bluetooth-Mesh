@@ -3,7 +3,6 @@ import struct
 from typing import *
 from uuid import UUID
 
-
 crc8_table = [
 	0x00, 0x91, 0xe3, 0x72, 0x07, 0x96, 0xe4, 0x75,
 	0x0e, 0x9f, 0xed, 0x7c, 0x09, 0x98, 0xea, 0x7b,
@@ -45,11 +44,14 @@ crc8_table = [
 	0xb4, 0x25, 0x57, 0xc6, 0xb3, 0x22, 0x50, 0xc1,
 	0xba, 0x2b, 0x59, 0xc8, 0xbd, 0x2c, 0x5e, 0xcf
 ]
+
+
 def fcs_calc(data: bytes) -> int:
 	fcs = 0xFF
 	for b in data:
 		fcs = crc8_table[fcs ^ b]
 	return 0xFF - fcs
+
 
 def fcs_check(fcs: int, data: bytes) -> bool:
 	fcs_check = 0xFF
@@ -57,15 +59,20 @@ def fcs_check(fcs: int, data: bytes) -> bool:
 		fcs_check = crc8_table[fcs_check ^ b]
 	return crc8_table[fcs_check ^ fcs] == 0xCF
 
+
 class GPCF(enum.IntEnum):
 	TRANSACTION_START = 0b00
 	TRANSACTION_ACK = 0b01
 	TRANSACTION_CONTINUE = 0b10
 	PROVISIONING_BEARER_CONTROL = 0b11
-GPCF_classes = dict() # type: Dict[GPCF, Any]
+
+
+GPCF_classes = dict()  # type: Dict[GPCF, Any]
+
 
 class GenericProvisioningPDU:
 	MAX_LEN = 24
+
 	def __init__(self):
 		self.transaction_number = None
 
@@ -90,21 +97,21 @@ class GenericProvisioningPDU:
 	def from_bytes(cls, b: bytes) -> 'GenericProvisioningPDU':
 		gpcf = GPCF(b[0] & 0x03)
 		gpcf_cls = GPCF_classes[gpcf]
-		control_bytes = b[:gpcf_cls.control_pdu_size()]
-		payload = b[gpcf_cls.control_pdu_size():]
-		out =  gpcf_cls.control_from_bytes(control_bytes)
+		control_pdu_size = gpcf_cls.control_pdu_size() if gpcf_cls.control_pdu_size() > 0 else len(b)
+		control_bytes = b[:control_pdu_size]
+		payload = b[control_pdu_size:]
+		out = gpcf_cls.control_from_bytes(control_bytes)
 		if payload:
 			out.set_payload(payload)
 		return out
 
+
 class TransactionStartPDU(GenericProvisioningPDU):
 	__slots__ = "seg_n", "length", "fcs", "data"
-	def __init__(self, seg_n: int, length: int, fcs: int = None,  data: bytes = None):
+
+	def __init__(self, seg_n: int, length: int, fcs: int, data: Optional[bytes] = None):
 		super().__init__()
-		if data is not None and fcs is None:
-			self.fcs = fcs_calc(data)
-		else:
-			self.fcs = fcs
+		self.fcs = fcs
 		self.data = data
 		self.seg_n = seg_n
 		self.length = length
@@ -112,12 +119,7 @@ class TransactionStartPDU(GenericProvisioningPDU):
 	def payload(self) -> bytes:
 		return self.data
 
-	def set_payload(self, payload: bytes, check_fcs: bool = True, set_fcs: bool = False):
-		if check_fcs:
-			if not fcs_check(self.fcs, payload):
-				raise ValueError("invalid fcs")
-		elif set_fcs:
-			self.fcs = fcs_calc(payload)
+	def set_payload(self, payload: bytes):
 		self.data = payload
 
 	@classmethod
@@ -125,12 +127,12 @@ class TransactionStartPDU(GenericProvisioningPDU):
 		return 4
 
 	def control_to_bytes(self) -> bytes:
-		return struct.pack("!BHB", ((self.seg_n&0x3f)<<2)|GPCF.TRANSACTION_START, self.length, self.fcs)
+		return struct.pack("!BHB", ((self.seg_n & 0x3f) << 2) | GPCF.TRANSACTION_START, self.length, self.fcs)
 
 	@classmethod
 	def control_from_bytes(cls, b: bytes):
 		seg_n, length, fcs = struct.unpack("!BHB", b)
-		seg_n = ((seg_n&0xFC)>>2)
+		seg_n = ((seg_n & 0xFC) >> 2)
 		return cls(seg_n, length, fcs)
 
 	@staticmethod
@@ -141,6 +143,7 @@ class TransactionStartPDU(GenericProvisioningPDU):
 class TransactionAckPDU(GenericProvisioningPDU):
 
 	def __init__(self, transaction_number: int = None):
+		super().__init__()
 		self.transaction_number = transaction_number
 
 	@classmethod
@@ -155,17 +158,18 @@ class TransactionAckPDU(GenericProvisioningPDU):
 	def control_from_bytes(cls, b: bytes):
 		return cls()
 
-
 	@staticmethod
 	def gpcf() -> GPCF:
 		return GPCF.TRANSACTION_ACK
 
+
 class TransactionContinuationPDU(GenericProvisioningPDU):
 	LEN = 1
 	__slots__ = "segment_index", "segment_data"
-	def __init__(self, segment_index: int, segment_data: bytes):
+
+	def __init__(self, segment_index: int, segment_data: Optional[bytes] = None):
 		super().__init__()
-		if self.segment_index > 2**6:
+		if segment_index > 2 ** 6:
 			raise ValueError(f"segment_index too high {segment_index}")
 		self.segment_data = segment_data
 		self.segment_index = segment_index
@@ -173,43 +177,48 @@ class TransactionContinuationPDU(GenericProvisioningPDU):
 	def payload(self) -> bytes:
 		return self.segment_data
 
+	def set_payload(self, payload: bytes) -> None:
+		self.segment_data = payload
 
 	def control_to_bytes(self) -> bytes:
-		return bytes([(self.segment_index<<2) | GPCF.TRANSACTION_CONTINUE])
+		return bytes([(self.segment_index << 2)| GPCF.TRANSACTION_CONTINUE])
 
 	@classmethod
 	def control_from_bytes(cls, b: bytes) -> 'TransactionContinuationPDU':
-		return cls(b[0]<<2, b[1:])
+		return cls(b[0] >> 2, b[1:])
 
 	@classmethod
 	def control_pdu_size(cls) -> int:
-		return 2
-
+		return 1
 
 	@staticmethod
 	def gpcf() -> GPCF:
 		return GPCF.TRANSACTION_CONTINUE
+
 
 class BearerControlOpcode(enum.IntEnum):
 	LinkOpen = 0x00
 	LinkACK = 0x01
 	LinkClose = 0x02
 
-bearer_control_opcode_classes = dict() # type: Dict[BearerControlOpcode, Any]
+
+bearer_control_opcode_classes = dict()  # type: Dict[BearerControlOpcode, Any]
+
 
 class BearerControlPDU(GenericProvisioningPDU):
 	LEN = 1
 	__slots__ = "opcode"
+
 	def __init__(self, opcode: BearerControlOpcode):
 		super().__init__()
 		self.opcode = opcode
 
 	def control_to_bytes(self) -> bytes:
-		return bytes([(self.opcode>>2)|GPCF.PROVISIONING_BEARER_CONTROL]) + self.bearer_to_bytes()
+		return bytes([(self.opcode >> 2) | GPCF.PROVISIONING_BEARER_CONTROL]) + self.bearer_to_bytes()
 
 	@classmethod
 	def control_pdu_size(cls) -> int:
-		return 1
+		return -1
 
 	def bearer_to_bytes(self) -> bytes:
 		raise NotImplementedError()
@@ -220,15 +229,13 @@ class BearerControlPDU(GenericProvisioningPDU):
 
 	@classmethod
 	def control_from_bytes(cls, b: bytes) -> 'BearerControlPDU':
-		opcode = BearerControlOpcode(b[0]>>2)
+		opcode = BearerControlOpcode(b[0] >> 2)
+		print(f"opcode: {opcode} b: {b}")
 		return bearer_control_opcode_classes[opcode].bearer_from_bytes(b[1:])
-
 
 	@staticmethod
 	def gpcf() -> GPCF:
 		return GPCF.PROVISIONING_BEARER_CONTROL
-
-
 
 
 class LinkOpenMessage(BearerControlPDU):
@@ -241,10 +248,11 @@ class LinkOpenMessage(BearerControlPDU):
 
 	@classmethod
 	def bearer_from_bytes(cls, b: bytes) -> 'LinkOpenMessage':
-		return cls(UUID(bytes=b))
+		return cls(UUID(bytes=b[1:]))
 
 	def bearer_to_bytes(self) -> bytes:
 		return self.dev_uuid.bytes
+
 
 class LinkAckMessage(BearerControlPDU):
 
@@ -253,20 +261,23 @@ class LinkAckMessage(BearerControlPDU):
 
 	@classmethod
 	def bearer_from_bytes(cls, b: bytes) -> 'LinkAckMessage':
-		if len(b)!=0:
+		if len(b) != 0:
 			raise ValueError("ack message not empty")
 		return cls()
 
 	def bearer_to_bytes(self) -> bytes:
 		return bytes()
 
+
 class LinkCloseReason(enum.IntEnum):
 	Success = 0
 	Timeout = 1
 	Fail = 2
 
+
 class LinkCloseMessage(BearerControlPDU):
 	__slots__ = "reason",
+
 	def __init__(self, reason: LinkCloseReason):
 		super().__init__(BearerControlOpcode.LinkClose)
 		self.reason = reason

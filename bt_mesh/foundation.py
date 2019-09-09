@@ -1,3 +1,5 @@
+import struct
+
 from . import access
 from .mesh import *
 from .serialize import *
@@ -52,7 +54,7 @@ class StepResolution(IntFlag):
 			return 10 * 60 * 1000
 
 
-class PublishPeriod(ByteSerializable, Serializable):
+class PublishPeriod(ByteSerializable):
 	__slots__ = "steps_num", "steps_res"
 
 	def __init__(self, steps_num: int, steps_res: StepResolution) -> None:
@@ -74,11 +76,7 @@ class PublishPeriod(ByteSerializable, Serializable):
 		}
 
 	@classmethod
-	def from_dict(cls, d: Dict[str, Any]) -> 'PublishPeriod':
-		return cls(d["steps_num"], StepResolution(d["steps_res"]))
-
-	@classmethod
-	def from_bytes(cls, b: bytes) -> 'PublishPeriod':
+	def from_bytes(cls, b: bytes) -> 'ByteSerializable':
 		if len(b) != 1:
 			raise ValueError(f"len of bytes should be 1 not {len(b)}")
 		steps_num = b[0] & 0x3F
@@ -87,10 +85,10 @@ class PublishPeriod(ByteSerializable, Serializable):
 
 
 class SIGModelID(U16, Enum):
-	ConfigurationServer = U16(0x0001)
-	ConfigurationClient = U16(0x0002)
-	HealthServer = U16(0x0003)
-	HealthClient = U16(0x0004)
+	ConfigurationServer = 0x0001
+	ConfigurationClient = 0x0002
+	HealthServer = 0x0003
+	HealthClient = 0x0004
 
 
 class VendorModelID(ByteSerializable):
@@ -127,33 +125,54 @@ class CompositionDataPage0(CompositionDataPage):
 
 
 class Fault(U8, Enum):
-	NoFault = U8(0x00)
-	BatteryLow = U8(0x02)
-	SupplyVoltageTooLow = U8(0x04)
-	SupplyVoltageTooHigh = U8(0x06)
-	PowerSupplyInterrupted = U8(0x08)
-	NoLoad = U8(0x0A)
-	Overload = U8(0x0C)
-	Overheat = U8(0x0E)
-	Condensation = U8(0x10)
-	Vibration = U8(0x12)
+	NoFault = 0x00
+	BatteryLow = 0x02
+	SupplyVoltageTooLow = 0x04
+	SupplyVoltageTooHigh = 0x06
+	PowerSupplyInterrupted = 0x08
+	NoLoad = 0x0A
+	Overload = 0x0C
+	Overheat = 0x0E
+	Condensation = 0x10
+	Vibration = 0x12
 	Configuration = 14
-	ElementNotCalibrated = U8(0x16)
-	Memory = U8(0x18)
-	SelfTest = U8(0x1A)
-	InputTooLow = U8(0x1C)
-	InputTooHigh = U8(0x1E)
-	InputNoChange = U8(0x20)
-	ActuatorBlocked = U8(0x22)
-	HousingOpened = U8(0x24)
-	Tamper = U8(0x26)
-	DeviceMoved = U8(0x28)
-	DeviceDropped = U8(0x2A)
-	Overflow = U8(0x2C)
-	Empty = U8(0x2E)
-	InternalBus = U8(0x30)
-	MechanismJammed = U8(0x32)
-	VendorStart = U8(0x80)
+	ElementNotCalibrated = 0x16
+	Memory = 0x18
+	SelfTest = 0x1A
+	InputTooLow = 0x1C
+	InputTooHigh = 0x1E
+	InputNoChange = 0x20
+	ActuatorBlocked = 0x22
+	HousingOpened = 0x24
+	Tamper = 0x26
+	DeviceMoved = 0x28
+	DeviceDropped = 0x2A
+	Overflow = 0x2C
+	Empty = 0x2E
+	InternalBus = 0x30
+	MechanismJammed = 0x32
+	VendorStart = 0x80
+
+
+class Status(U8, Enum):
+	Success = 0x00
+	InvalidAddress = 0x01
+	InvalidModel = 0x02
+	InvalidAppKeyIndex = 0x03
+	InvalidNetKeyIndex = 0x04
+	InsufficientResources = 0x05
+	KeyIndexAlreadyStored = 0x06
+	InvalidPublishParameters = 0x07
+	NotASubscribeModel = 0x08
+	StorageFailure = 0x09
+	FeatureNotSupported = 0x0A
+	CannotUpdate = 0x0B
+	CannotRemove = 0x0C
+	CannotBind = 0x0D
+	TemporarilyUnableToChangeState = 0x0E
+	CannotSet = 0x0F
+	UnspecifiedError = 0x10
+	InvalidBinding = 0x11
 
 
 SubscriptionAddress = Union[GroupAddress, VirtualAddress]
@@ -166,19 +185,25 @@ class SubscriptionList:
 		self.addresses = addresses
 
 
-class ModelPublication(Serializable):
-	__slots__ = "address", "period", "appkey_index", "friendship_credentials_flag", "ttl", "retransmit"
+class ModelPublication(ByteSerializable):
+	__slots__ = "element_address", "publish_address", "app_key_index", "credential_flag", "publish_ttl", "publish_period", \
+				"publish_retransmit", "model_identifier", "net_key_index"
 
-	def __init__(self, address: Address, period: PublishPeriod, appkey_index: AppKeyIndex,
-				 friendship_credentials_flag: bool,
-				 ttl: TTL, retransmit: RetransmitParameters):
-		self.address = address
-		self.period = period
-		self.appkey_index = appkey_index
-		self.friendship_credentials_flag = friendship_credentials_flag
-		self.ttl = ttl
-		self.retransmit = retransmit
+	def __init__(self, element_address: UnicastAddress, publish_address: Address, app_key_index: AppKeyIndex,
+				 credential_flag: bool, publish_ttl: TTL, publish_period: PublishPeriod,
+				 publish_retransmit: RetransmitParameters,
+				 model_identifier: access.ModelIdentifier, net_key_index: Optional[NetKeyIndex] = None) -> None:
+		self.element_address = element_address
+		self.publish_address = publish_address
+		self.app_key_index = app_key_index
+		self.credential_flag = credential_flag
+		self.publish_ttl = publish_ttl
+		self.publish_period = publish_period
+		self.publish_retransmit = publish_retransmit
+		self.model_identifier = model_identifier
+		self.net_key_index = net_key_index  # Not used in serialization but is used in model publishing
 
+	# check what net key the app key is bound to
 	def to_dict(self) -> Dict[str, Any]:
 		return {
 			"address": self.address,
@@ -190,7 +215,25 @@ class ModelPublication(Serializable):
 		}
 
 
-class NetKeyList(ByteSerializable):
-	__slots__ = "indexed_list",
-	def __init__(self, indexed_list: Dict[NetKeyIndex, crypto.NetKeyIndexSlot]):
+	def to_bytes(self) -> bytes:
+		appkey_credential = U16(self.app_key_index.value | (self.credential_flag << AppKeyIndex.INDEX_LEN))
+		publish_address = self.publish_address.uuid.bytes if isinstance(self.publish_address,
+																		VirtualAddress) else self.publish_address.to_bytes()
+		return self.element_address.to_bytes() + publish_address + appkey_credential.to_bytes() + \
+			   self.publish_ttl.to_bytes() + self.publish_period.to_bytes() + self.publish_retransmit.to_bytes() + self.model_identifier.to_bytes()
 
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'ModelPublication':
+		publish_address_size = 2 if len(b) < (2 + 2 + 1 + 1 + 1 + 4) else 16
+		mp_struct = struct.Struct(f"<Hs{publish_address_size}HBBB")
+		element_address, publish_address_raw, appkey_credential, publish_ttl, \
+		publish_period, publish_retransmit = mp_struct.unpack(b)
+		model_identifier = b[mp_struct.size:]
+		publish_address = UnicastAddress.from_bytes(
+			publish_address_raw) if publish_address_size == 2 else VirtualAddress(UUID(publish_address_raw))
+		appkey_index = appkey_credential & ((1 << KeyIndex.INDEX_LEN) - 1)
+		credential = (appkey_credential & (1 << KeyIndex.INDEX_LEN)) != 0
+		return cls(UnicastAddress(element_address), publish_address, appkey_index, credential, TTL(publish_ttl),
+				   PublishPeriod.from_bytes(publish_period.to_bytes(1, byteorder="little")),
+				   RetransmitParameters.from_bytes(publish_retransmit.to_bytes(1, byteorder="little")),
+				   access.ModelIdentifier.from_bytes(model_identifier))
