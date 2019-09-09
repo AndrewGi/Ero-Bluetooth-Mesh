@@ -52,7 +52,7 @@ class StepResolution(IntFlag):
 			return 10 * 60 * 1000
 
 
-class PublishPeriod(ByteSerializable):
+class PublishPeriod(ByteSerializable, Serializable):
 	__slots__ = "steps_num", "steps_res"
 
 	def __init__(self, steps_num: int, steps_res: StepResolution) -> None:
@@ -67,8 +67,18 @@ class PublishPeriod(ByteSerializable):
 	def to_bytes(self) -> bytes:
 		return (((self.steps_res & 0x3) << 6) | (self.steps_num & 0x3F)).to_bytes(1, byteorder="little")
 
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"steps_num": self.steps_num,
+			"steps_res": self.steps_res.value
+		}
+
 	@classmethod
-	def from_bytes(cls, b: bytes) -> 'ByteSerializable':
+	def from_dict(cls, d: Dict[str, Any]) -> 'PublishPeriod':
+		return cls(d["steps_num"], StepResolution(d["steps_res"]))
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'PublishPeriod':
 		if len(b) != 1:
 			raise ValueError(f"len of bytes should be 1 not {len(b)}")
 		steps_num = b[0] & 0x3F
@@ -156,7 +166,7 @@ class SubscriptionList:
 		self.addresses = addresses
 
 
-class ModelPublication:
+class ModelPublication(Serializable):
 	__slots__ = "address", "period", "appkey_index", "friendship_credentials_flag", "ttl", "retransmit"
 
 	def __init__(self, address: Address, period: PublishPeriod, appkey_index: AppKeyIndex,
@@ -168,6 +178,16 @@ class ModelPublication:
 		self.friendship_credentials_flag = friendship_credentials_flag
 		self.ttl = ttl
 		self.retransmit = retransmit
+
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"address": self.address,
+			"period": self.period,
+			"appkey_index": self.appkey_index,
+			"friendship_credentials_flag": self.friendship_credentials_flag,
+			"ttl": self.ttl,
+			"retransmit": self.retransmit
+		}
 
 
 class NetKeyList(ByteSerializable):

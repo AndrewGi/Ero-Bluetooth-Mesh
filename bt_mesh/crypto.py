@@ -544,22 +544,38 @@ class NetKeyIndexSlot(KeyIndexSlot):
 
 
 class GlobalContext(Serializable):
-	__slots__ = "apps", "nets", "iv_index"
+	__slots__ = "apps", "nets", "iv_index", "iv_updating"
 
-	def __init__(self, iv_index: IVIndex, primary_net: NetKeyIndexSlot):
-		if primary_net.index != 0:
-			raise ValueError(f"primary net key has to have index 0x0000 not 0x{primary_net.index:04X}")
+	def __init__(self, iv_index: IVIndex, nets: List[NetKeyIndexSlot], apps: List[AppKeyIndexSlot] = None,
+				 iv_updating: bool = False):
 		self.iv_index = iv_index
+		self.iv_updating = iv_updating
 		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
+		for app in apps:
+			self.apps[app.index] = app
 		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
+		for net in nets:
+			self.nets[net.index] = net
+
+		if NetKeyIndex(0) not in self.nets.keys():
+			raise ValueError("missing primary net")
 
 	@classmethod
 	def new(cls) -> 'GlobalContext':
-		return cls(IVIndex(0), NetKeyIndexSlot.new_primary())
+		return cls(IVIndex(0), [NetKeyIndexSlot.new_primary(), ])
 
-	def get_iv_index(self, ivi: Optional[bool] = None):
-		# TODO: get iv_index by ivi
-		return self.iv_index
+	def get_iv_index(self, ivi: Optional[bool] = None) -> Optional[IVIndex]:
+		if not ivi:
+			return self.iv_index
+		elif self.iv_index.ivi() == ivi:
+			return self.iv_index
+		elif self.iv_updating:
+			if self.iv_index == IVIndex(0):
+				return None
+			else:
+				return self.iv_index.prev_iv()
+		else:
+			return None  # ivi doesn't match and not updating
 
 	def primary_net(self):
 		return self.nets[NetKeyIndex(0)]
@@ -577,14 +593,16 @@ class GlobalContext(Serializable):
 	def to_dict(self) -> Dict[str, Any]:
 		return {
 			"iv_index": self.iv_index,
+			"iv_updating": self.iv_updating,
 			"apps": [d.to_dict() for d in self.apps.values()],
 			"nets": [d.to_dict() for d in self.nets.values()]
 		}
 
 	@classmethod
-	def from_dict(cls, d: Dict[str, Any]):
-
-		cls(IVIndex(d["iv_index"]))
+	def from_dict(cls, d: Dict[str, Any]) -> 'GlobalContext':
+		apps = [AppKeyIndexSlot.from_dict(app_d) for app_d in d["apps"]]
+		nets = [NetKeyIndexSlot.from_dict(net_d) for net_d in d["nets"]]
+		return cls(IVIndex(d["iv_index"]), nets, apps, d["iv_updating"])
 
 	def get_nid_rx_keys(self, nid: NID) -> Generator[[NetKeyIndex, NetworkSecurityMaterial], None, None]:
 		for slot in self.nets.values():
