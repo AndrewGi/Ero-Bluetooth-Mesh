@@ -37,6 +37,11 @@ class IVIndex(int):
 			raise OverflowError("iv index at max")
 		return IVIndex(self + 1)
 
+	def prev_iv(self) -> 'IVIndex':
+		if self == type(self)(0):
+			raise OverflowError("iv index at min")
+		return IVIndex(self - 1)
+
 
 class MIC:
 	__slots__ = ('bytes_be',)
