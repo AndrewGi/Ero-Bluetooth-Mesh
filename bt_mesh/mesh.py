@@ -3,6 +3,7 @@ from enum import IntEnum, IntFlag, Enum
 from uuid import UUID
 from .serialize import *
 
+
 class KeyIndex(U16):
 	INDEX_LEN = 12
 	byteorder = "little"
@@ -22,6 +23,7 @@ class KeyIndex(U16):
 		index_1 = (both_indexes.value >> cls.INDEX_LEN) & key_mask
 		return KeyIndex(index_0), KeyIndex(index_1)
 
+
 class NetKeyIndex(KeyIndex):
 	pass
 
@@ -32,6 +34,7 @@ class AppKeyIndex(KeyIndex):
 
 class CompanyID(U16):
 	byteorder = "little"
+
 
 SIGCompanyID = CompanyID(0)
 
@@ -123,11 +126,15 @@ class UnicastAddress(Address):
 			raise ValueError(f"{hex(addr)} is not a unicast address")
 		super().__init__(addr)
 
+	@classmethod
+	def last(cls) -> 'UnicastAddress':
+		return cls(0x3FFF)
+
 
 class VirtualAddress(Address):
 	__slots__ = "uuid",
 
-	VIRTUAL_AES_CMAC: Callable[[UUID,], bytes]
+	VIRTUAL_AES_CMAC: Callable[[UUID, ], bytes]
 
 	def addr(self) -> Address:
 		if not self.VIRTUAL_AES_CMAC:
@@ -139,7 +146,7 @@ class VirtualAddress(Address):
 		super().__init__(self.addr().value)
 
 
-class TransmitParameters:
+class TransmitParameters(Serializable):
 	__slots__ = "times", "delay_ms"
 
 	def __init__(self, times: int, delay_ms: int):
@@ -149,6 +156,14 @@ class TransmitParameters:
 	@classmethod
 	def default(cls) -> 'TransmitParameters':
 		return cls(5, 100)
+
+	def to_dict(self) -> Dict[str, int]:
+		return {"times": self.times, "delay_ms": self.delay_ms}
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, int]) -> 'TransmitParameters':
+		return cls(d["times"], d["delay_ms"])
+
 
 class TransactionNumber(U8):
 	pass
@@ -184,8 +199,6 @@ class Features(IntFlag):
 	Proxy = 2
 	Friend = 4
 	LowPower = 8
-
-
 
 
 class LocationDescriptor:

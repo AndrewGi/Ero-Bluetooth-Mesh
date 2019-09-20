@@ -1,4 +1,5 @@
 from typing import *
+from functools import total_ordering
 
 
 class ByteSerializable:
@@ -22,6 +23,7 @@ class Serializable:
 IntOperand = Union['Integer', int]
 
 
+@total_ordering
 class Integer(ByteSerializable):
 	__slots__ = "value",
 	length: int
@@ -88,6 +90,12 @@ class Integer(ByteSerializable):
 			return self.new(-self.value)
 		else:
 			return self.new(2 ** (self.length * 8) - self.value)
+
+	def __eq__(self, other: IntOperand) -> bool:
+		return self.value == self._value(other)
+
+	def __lt__(self, other: IntOperand) -> bool:
+		return self.value < self._value(other)
 
 
 DEFAULT_ENDIAN = "little"

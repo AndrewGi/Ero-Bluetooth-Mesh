@@ -267,6 +267,7 @@ class ECCPublicKey:
 
 class ECDHSharedSecret(Key):
 	KEY_LEN = 32
+
 	def __init__(self, secret_bytes: bytearray):
 		super().__init__(secret_bytes)
 
@@ -401,7 +402,7 @@ def s1(m: Union[bytes, str]) -> Salt:
 	assert m, "m can not be empty"
 	if isinstance(m, str):
 		m = m.encode()
-	return Salt(aes_cmac(Key(b'\x00' * Key.KEY_LEN), m))
+	return Salt(aes_cmac(Key(bytearray(b'\x00' * Key.KEY_LEN)), m))
 
 
 def k1(salt: Salt, key: Key, info: bytes) -> MAC:
@@ -447,7 +448,7 @@ class KeyRefreshPhase(enum.IntEnum):
 	Phase3 = 0x03  # Revoke old keys
 
 
-class KeyIndexSlot(Serializable):
+class KeyIndexSlot(Serializable, ABC):
 	__slots__ = "index", "new", "old", "phase"
 
 	def __init__(self, index: KeyIndex, old: SecurityMaterial, new: Optional[SecurityMaterial] = None,
@@ -508,10 +509,10 @@ class AppKeyIndexSlot(KeyIndexSlot):
 
 	@classmethod
 	def from_dict(cls, d: Dict[str, Any]) -> 'AppKeyIndexSlot':
-		new = None if d["new"] is None else AppSecurityMaterial.from_key(AppKey.from_hex(d["new"]))
+		new = None if d["new"] is None else AppSecurityMaterial.from_key(AppKey.from_str(d["new"]))
 
 		return cls(index=AppKeyIndex(d["index"]), phase=KeyRefreshPhase(d["phase"]),
-				   new=new, old=AppSecurityMaterial.from_key(AppKey.from_hex(d["old"])))
+				   new=new, old=AppSecurityMaterial.from_key(AppKey.from_str(d["old"])))
 
 
 class NetKeyIndexSlot(KeyIndexSlot):
@@ -529,7 +530,7 @@ class NetKeyIndexSlot(KeyIndexSlot):
 	def rx_sms(self) -> Tuple[NetKeyIndex, NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]]:
 		netkey = cast(NetKeyIndex, self.index)
 		sms = cast(Tuple[NetworkSecurityMaterial, Optional[NetworkSecurityMaterial]], super().rx_sms())
-		return (netkey,) + sms
+		return netkey, sms[0], sms[1]
 
 	def rx_by_nid(self, nid: NID) -> Generator[NetworkSecurityMaterial, None, None]:
 		_index, old, new = self.rx_sms()
@@ -537,6 +538,13 @@ class NetKeyIndexSlot(KeyIndexSlot):
 			yield old
 		if new and new.nid == nid:
 			yield new
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]) -> 'NetKeyIndexSlot':
+		new = None if d["new"] is None else NetworkSecurityMaterial.from_key(NetworkKey.from_str(d["new"]))
+
+		return cls(index=NetKeyIndex(d["index"]), phase=KeyRefreshPhase(d["phase"]),
+				   new=new, old=NetworkSecurityMaterial.from_key(NetworkKey.from_str(d["old"])))
 
 
 class GlobalContext(Serializable):
@@ -573,12 +581,12 @@ class GlobalContext(Serializable):
 	def add_app(self, slot: AppKeyIndexSlot):
 		if slot.index in self.apps:
 			raise ValueError(f"app key index {slot.index} already exists")
-		self.apps[slot.index] = slot
+		self.apps[cast(AppKeyIndex, slot.index)] = slot
 
 	def add_net(self, slot: NetKeyIndexSlot):
 		if slot.index in self.nets:
 			raise ValueError(f"net key index {slot.index} already exists")
-		self.nets[slot.index] = slot
+		self.nets[cast(NetKeyIndex, slot.index)] = slot
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
@@ -588,6 +596,7 @@ class GlobalContext(Serializable):
 			"nets": [d.to_dict() for d in self.nets.values()]
 		}
 
+	@classmethod
 	def from_dict(cls, d: Dict[str, Any]):
 		primary = NetKeyIndexSlot.from_dict(d["nets"][0])
 		context = cls(IVIndex(d["iv_index"]), primary)

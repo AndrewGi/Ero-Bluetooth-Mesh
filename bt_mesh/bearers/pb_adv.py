@@ -19,7 +19,6 @@ class AdvBearer(prov.ProvisionerBearer, bearer.Bearer, ABC):
 		self.ack_pb_adv: Optional[Callable[[], None]] = None
 		self.recv_pb_adv: Optional[Callable[[bytes, ], None]] = None
 
-
 	def send_pb_adv(self, pb_adv_pdu: bytes, repeat: Optional[bool] = False):
 		raise NotImplementedError()
 
@@ -28,20 +27,20 @@ class AdvBearer(prov.ProvisionerBearer, bearer.Bearer, ABC):
 
 
 class AdvPDU:
-	MTU = 29 # maybe actually 27?
+	MTU = 29  # maybe actually 27?
 	STRUCT = struct.Struct("!LB")
 	__slots__ = "link_id", "transaction_number", "generic_prov_pdu"
 
-	def __init__(self, link_id: LinkID, transaction_number: prov.TransactionNumber,
+	def __init__(self, link_id: LinkID, transaction_number: prov.mesh.TransactionNumber,
 				 generic_prov_pdu: pb_generic.GenericProvisioningPDU):
 		self.link_id = link_id
 		self.transaction_number = transaction_number
 		self.generic_prov_pdu = generic_prov_pdu
 
 	def to_bytes(self) -> bytes:
-		b = self.link_id.to_bytes(4, byteorder="big") + self.transaction_number.to_bytes(1,
-																							byteorder="big") + self.generic_prov_pdu.to_bytes()
-		if len(b)>self.MTU:
+		b = self.link_id.to_bytes(4,
+								  byteorder="big") + self.transaction_number.to_bytes() + self.generic_prov_pdu.to_bytes()
+		if len(b) > self.MTU:
 			raise ValueError(f"adv mtu {self.MTU} > {len(b)}")
 		return b
 
@@ -50,6 +49,29 @@ class AdvPDU:
 		link_id, transaction_number = cls.STRUCT.unpack(b[:cls.STRUCT.size])
 		pdu = pb_generic.GenericProvisioningPDU.from_bytes(b[cls.STRUCT.size:])
 		return cls(link_id, transaction_number, pdu)
+
+
+class Links:
+	__slots__ = "links", "link_bearer"
+
+	def __init__(self, link_bearer: AdvBearer) -> None:
+		self.links: Dict[LinkID, Link] = dict()
+		self.link_bearer = link_bearer
+		self.link_bearer.recv_pb_adv = self.recv_pb_adv
+
+	def close_link(self, link_id: LinkID) -> None:
+		del self.links[link_id]
+
+	def send_pb_adv(self, pdu: bytes, repeat: bool) -> None:
+		self.send_pb_adv(pdu, repeat)
+
+	def recv_pb_adv(self, adv_pdu: AdvPDU) -> None:
+		link_id = adv_pdu.link_id
+		if link_id in self.links.keys():
+			self.links[link_id].handle_pb(adv_pdu)
+		else:
+			# link id is not in collection
+			pass
 
 
 class Link(prov.ProvisionerBearer):
@@ -86,7 +108,7 @@ class Link(prov.ProvisionerBearer):
 		self.device_uuid = device_uuid
 		self.link_id = link_id
 		self.transaction_number = self.START_TRANSACTION_NUMBER
-		self.link_bearer = None  # type: Optional[AdvBearer]
+		self.send_pb_adv: Optional[Callable[[bytes, bool], None]] = None
 		self.is_open = False
 		self.accept_incoming = True
 		self.incoming_adv_pdus = queue.Queue()
@@ -97,12 +119,12 @@ class Link(prov.ProvisionerBearer):
 		self.message_did_ack = False
 
 	def increment_transaction_number(self):
-		self.transaction_number = pb_generic.TransactionNumber(self.transaction_number + 1)
+		self.transaction_number = prov.mesh.TransactionNumber(self.transaction_number + 1)
 		if self.transaction_number > self.END_TRANSACTION_NUMBER:
 			self.transaction_number = self.START_TRANSACTION_NUMBER
 
 	def new_pdu(self, prov_pdu: pb_generic.GenericProvisioningPDU,
-				transaction_number: Optional[prov.TransactionNumber] = None) -> AdvPDU:
+				transaction_number: Optional[prov.mesh.TransactionNumber] = None) -> AdvPDU:
 		if prov_pdu is None:
 			raise AttributeError("prov_pdu is none")
 		if transaction_number is None:
@@ -121,7 +143,9 @@ class Link(prov.ProvisionerBearer):
 		self.send_with_retries(out_pdus, retries, link_ack=link_ack, transaction_ack=trans_ack)
 
 	def send_adv(self, pdu: AdvPDU, repeat: Optional[bool] = False):
-		self.link_bearer.send_pb_adv(pdu.to_bytes(), repeat)
+		if not self.send_pb_adv:
+			raise ValueError("missing send_pb_adv")
+		self.send_pb_adv(pdu.to_bytes(), repeat)
 
 	def send_with_retries(self, pdus: List[AdvPDU], retries: int = None, link_ack: bool = False,
 						  transaction_ack: bool = False):
@@ -140,7 +164,7 @@ class Link(prov.ProvisionerBearer):
 						return True
 			elif not transaction_ack:
 				time.sleep(self.RETRANSMISSION_DELAY)
-			elif (self.message_did_ack or self.wait_for_ack(self.RETRANSMISSION_DELAY)):
+			elif self.message_did_ack or self.wait_for_ack(self.RETRANSMISSION_DELAY):
 				return True
 		self.is_open = False
 		if (not transaction_ack) and (not link_ack):
@@ -150,11 +174,12 @@ class Link(prov.ProvisionerBearer):
 	def open(self):
 		if self.is_open:
 			raise RuntimeError("link already open")
-		pdu = self.new_pdu(pb_generic.LinkOpenMessage(self.device_uuid), transaction_number=0)
+		pdu = self.new_pdu(pb_generic.LinkOpenMessage(self.device_uuid),
+						   transaction_number=prov.mesh.TransactionNumber(0))
 		self.is_open = self.send_with_retries([pdu], link_ack=True)
 
-	def handle_link_ack(self, traction_number: prov.TransactionNumber, ack: pb_generic.TransactionAckPDU):
-		print(self.link_acked)
+	def handle_link_ack(self, traction_number: prov.mesh.TransactionNumber, ack: pb_generic.TransactionAckPDU):
+		del ack  # we don't use the message
 		if self.link_acked:
 			return
 		if not self.is_open and traction_number == 0:
@@ -168,9 +193,10 @@ class Link(prov.ProvisionerBearer):
 		print(f"GPCF: {gpcf} trans#: {adv_pdu.transaction_number}")
 		if gpcf == pb_generic.GPCF.PROVISIONING_BEARER_CONTROL:
 			bearer_control = cast(pb_generic.BearerControlPDU, adv_pdu.generic_prov_pdu)
-			opcode = bearer_control.opcode  # type: pb_generic.BearerControlOpcode
+			opcode: pb_generic.BearerControlOpcode = bearer_control.opcode
 			if opcode == pb_generic.BearerControlOpcode.LinkACK:
-				self.handle_link_ack(adv_pdu.transaction_number, cast(pb_generic.TransactionAckPDU, bearer_control.payload()))
+				self.handle_link_ack(adv_pdu.transaction_number,
+									 cast(pb_generic.TransactionAckPDU, bearer_control.payload()))
 		else:
 			adv_pdu.generic_prov_pdu.transaction_number = adv_pdu.transaction_number
 			self.recv_generic_prov_pdu(adv_pdu.generic_prov_pdu)
@@ -192,5 +218,8 @@ class Link(prov.ProvisionerBearer):
 		self.is_open = False
 		self.accept_incoming = False
 
-	def link_ack(self, transaction_number: prov.TransactionNumber):
+	def link_ack(self, transaction_number: prov.mesh.TransactionNumber):
 		self.send_adv(self.new_pdu(pb_generic.LinkAckMessage(), transaction_number=transaction_number))
+
+	def __del__(self):
+		self.close(pb_generic.LinkCloseReason.Fail)

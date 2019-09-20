@@ -355,10 +355,10 @@ class Reassembler:
 		self.start_seg_len = mtu - pb_generic.TransactionStartPDU.control_pdu_size()
 		self.continue_seg_len = mtu - pb_generic.TransactionContinuationPDU.control_pdu_size()
 		self.seg_n = seg_n
-		self.seg_mask = (2 ** (self.seg_n + 1)) - 1
-		self.segs_needed = self.seg_mask
+		self.seg_mask = (2 ** (self.seg_n + 1)) - 1  # generate bit mask of length (seg_n + 1)
+		self.segs_needed = self.seg_mask  # bit == 1 when need, bit == 0 when we receive said segment
 		self.transaction_number = transaction_number
-		self.data = bytearray(total_length)
+		self.data = bytearray(total_length)  # generate zeroed data array
 
 	@classmethod
 	def from_start_pdu(cls, start_pdu: pb_generic.TransactionStartPDU, mtu: int):
@@ -375,16 +375,19 @@ class Reassembler:
 		return pos
 
 	def insert_segment(self, seg_i: int, data: bytes):
-		if seg_i != self.seg_n:
+		if seg_i != self.seg_n:  # if segment is not the last seg
 			if seg_i == 0 and len(data) != self.start_seg_len:
 				raise ValueError("transaction start pdu too small")
 			if seg_i > 0 and len(data) != self.continue_seg_len:
 				raise ValueError("transaction continue pdu too small")
 		pos = self.seg_pos(seg_i)
 		if pos + len(data) > self.total_length:
-			raise ValueError(f"data out of bounds. seg_i: {seg_i} pos: {pos} data_len: {len(data)} expect_total: {self.total_length}")
+			raise ValueError(
+				f"data out of bounds. seg_i: {seg_i} pos: {pos} data_len: {len(data)} expect_total: {self.total_length}")
+		# insert segment data
 		for i in range(len(data)):
 			self.data[i + pos] = data[i]
+		# mark segment received
 		self.segs_needed = self.segs_needed & (~(1 << seg_i) & self.seg_mask)
 
 	def payload(self) -> bytes:
@@ -400,23 +403,19 @@ class Reassembler:
 	def insert_pdu(self, pdu: Union[pb_generic.TransactionStartPDU, pb_generic.TransactionContinuationPDU]):
 		if pdu.transaction_number != self.transaction_number:
 			# wrong transaction number
-			return
+			raise ValueError(f"incorrect transaction number ({pdu.transaction_number}!={self.transaction_number})")
 		if pdu.gpcf() == pb_generic.GPCF.TRANSACTION_START:
 			self.insert_segment(0, pdu.payload())
 		else:
 			self.insert_segment(cast(pb_generic.TransactionContinuationPDU, pdu).segment_index, pdu.payload())
 
 	def is_done(self) -> bool:
-		print(f"segs needed : {bin(self.segs_needed)}")
 		return self.segs_needed == 0
 
 
-TransactionNumber = NewType("TransactionNumber", int)
-
-
 class ProvisionerBearer:
-	START_TRANSACTION_NUMBER = TransactionNumber(0x00)
-	END_TRANSACTION_NUMBER = TransactionNumber(0x7F)
+	START_TRANSACTION_NUMBER = mesh.TransactionNumber(0x00)
+	END_TRANSACTION_NUMBER = mesh.TransactionNumber(0x7F)
 
 	def __init__(self):
 		self.message_ack_cv = threading.Condition()
@@ -438,9 +437,10 @@ class ProvisionerBearer:
 
 	def message_ackked(self):
 		self.message_did_ack = True
-		self.transaction_number = TransactionNumber(self.transaction_number + 1)
-		if self.transaction_number > self.END_TRANSACTION_NUMBER:
+		if self.transaction_number >= self.END_TRANSACTION_NUMBER:
 			self.transaction_number = self.END_TRANSACTION_NUMBER
+		else:
+			self.transaction_number += 1
 		with self.message_ack_cv:
 			self.message_ack_cv.notify_all()
 
@@ -456,6 +456,7 @@ class ProvisionerBearer:
 	def handle_transaction_start(self, start_pdu: pb_generic.TransactionStartPDU):
 		if self.transaction_assembler and self.transaction_assembler.transaction_number == start_pdu.transaction_number:
 			return  # we already started this transaction
+		# FIXME: start_pdu.transaction_number != 0?
 		if start_pdu.transaction_number != 0 and start_pdu.transaction_number < self.incoming_transaction_number:
 			return  # old transaction
 		self.incoming_transaction_number = start_pdu.transaction_number
@@ -477,9 +478,10 @@ class ProvisionerBearer:
 		if self.transaction_assembler and self.transaction_assembler.is_done():
 			pdu_data = self.transaction_assembler.payload()
 			self.send_generic_prov_pdus([self.transaction_assembler.ack()])
-			self.incoming_transaction_number = TransactionNumber(self.incoming_transaction_number + 1)
-			if self.incoming_transaction_number == 0x100:
-				self.incoming_transaction_number = TransactionNumber(self.END_TRANSACTION_NUMBER + 1)
+			if self.incoming_transaction_number.value >= 0xFF:
+				self.transaction_number = self.END_TRANSACTION_NUMBER + 1
+			else:
+				self.incoming_transaction_number += 1
 			self.recv_prov_pdu(PDU.from_bytes(pdu_data))
 			self.transaction_assembler = None
 
@@ -495,7 +497,7 @@ class AuthValue:
 		self.oob_data = oob_data
 
 	def to_bytes(self) -> bytes:
-		if self.oob_type == 0:
+		if self.oob_type == OOBAction:
 			return bytes(self.AUTH_VALUE_LEN)
 		pass
 
@@ -540,11 +542,11 @@ class ConfirmationPackets:
 	__slots__ = "prov_invite", "prov_capabilities", "prov_start", "prov_public_key", "device_public_key"
 
 	def __init__(self):
-		self.prov_invite = None  # type: Optional[Invite]
-		self.prov_capabilities = None  # type: Optional[Capabilities]
-		self.prov_start = None  # type: Optional[Start]
-		self.prov_public_key = None  # type: Optional[PublicKeyPDU]
-		self.device_public_key = None  # type: Optional[PublicKeyPDU]
+		self.prov_invite: Optional[Invite] = None
+		self.prov_capabilities: Optional[Capabilities] = None
+		self.prov_start: Optional[Start] = None
+		self.prov_public_key: Optional[PublicKeyPDU] = None
+		self.device_public_key: Optional[PublicKeyPDU] = None
 
 	def is_ready(self) -> bool:
 		for slot in self.__slots__:
@@ -559,7 +561,7 @@ class ConfirmationPackets:
 
 	def confirmation_salt(self) -> ConfirmationSalt:
 		inp = self.confirmation_input()
-		print("input: "+ inp.hex())
+		print("input: " + inp.hex())
 		return ConfirmationSalt(crypto.s1(inp))
 
 
@@ -581,50 +583,49 @@ class ProvisioningEvent(enum.IntEnum):
 
 
 class UnprovisionedDevice:
-	# __slots__ = "last_seen", "device_uuid", "last_beacon", "pb_bearer", "invited", "worker_queue", "worker"
 	def __init__(self, first_beacon: beacon.UnprovisionedBeacon):
 		self.last_seen = first_beacon.last_seen
 		self.device_uuid = first_beacon.dev_uuid
 		self.last_beacon = first_beacon
-		self.pb_bearer = None  # type: Optional[ProvisionerBearer]
+		self.pb_bearer: Optional[ProvisionerBearer] = None
 		self.invited = False
 		self.provision_on_connect = False
 		self.worker_queue = queue.Queue()
 		self.worker = threading.Thread(target=self.worker_func)
 		self.worker.start()
-		self.algorithm = None  # type: Optional[Algorithms]
+		self.algorithm: Optional[Algorithms] = None
 		self.public_key_option = PublicKeyOption.NoOOB
-		self.get_device_key_oob = None  # type: Optional[Callable[UnprovisionedDevice, PublicKeyPDU]]
+		self.get_device_key_oob: Optional[Callable[UnprovisionedDevice, PublicKeyPDU]] = None
 		self.auth_method: AuthenticationMethod = AuthenticationMethod.NoOOB
 		self.auth_action: AuthenticationAction = OutputOOBAction.NoAction
 		self.auth_size = OOBSize(0)
 		self.auth_value = AuthValue.no_oob()
-		self.private_key = None  # type: Optional[crypto.ECCPrivateKey]
+		self.private_key: Optional[crypto.ECCPrivateKey] = None
 		self.confirmation_packets = ConfirmationPackets()
-		self.confirmation_salt = None  # type: Optional[ConfirmationSalt]
-		self.capabilities = None  # type: Optional[Capabilities]
-		self.device_public_key = None  # type: Optional[crypto.ECCPublicKey]
-		self.shared_secret = None  # type: Optional[crypto.ECDHSharedSecret]
+		self.confirmation_salt: Optional[ConfirmationSalt] = None
+		self.capabilities: Optional[Capabilities] = None
+		self.device_public_key: Optional[crypto.ECCPublicKey] = None
+		self.shared_secret: Optional[crypto.ECDHSharedSecret] = None
 		self.attention_timer = 5
-		self.device_random = None  # type: Optional[Random]
-		self.prov_random = None  # type: Optional[Random]
-		self.device_confirmation = None  # type: Optional[ConfirmationDevice]
-		self.prov_confirmation = None  # type: Optional[ConfirmationProvisioner]
-		self.confirmation_key = None  # type: Optional[ConfirmationKey]
-		self.provision_salt = None  # type: Optional[crypto.ProvisioningSalt]
+		self.device_random: Optional[Random] = None
+		self.prov_random: Optional[Random] = None
+		self.device_confirmation: Optional[ConfirmationDevice] = None
+		self.prov_confirmation: Optional[ConfirmationProvisioner] = None
+		self.confirmation_key: Optional[ConfirmationKey] = None
+		self.provision_salt: Optional[crypto.ProvisioningSalt] = None
 		self.close_reason = pb_generic.LinkCloseReason.Timeout
-		self.done_callback = None  # type: Optional[Callable[UnprovisionedDevice, None]]
-		self.get_provisioning_data = None  # type: Optional[Callable[UnprovisionedDevice, ProvisioningData]]
-		self.provisioning_data = None  # type: Optional[ProvisioningData]
-		self.last_event = None  # type: Optional[ProvisioningEvent]
+		self.done_callback: Optional[Callable[UnprovisionedDevice, None]] = None
+		self.get_provisioning_data: Optional[Callable[UnprovisionedDevice, ProvisioningData]] = None
+		self.provisioning_data: Optional[ProvisioningData] = None
+		self.last_event: Optional[ProvisioningEvent] = None
 		self.event_condition = threading.Condition()
-		self.primary_address = None  # type: Optional[mesh.UnicastAddress]
+		self.primary_address: Optional[mesh.UnicastAddress] = None
 		self.done = False
-		self.device_key = None  # type: Optional[crypto.DeviceKey]
-		self.session_key = None  # type: Optional[crypto.SessionKey]
-		self.session_nonce = None  # type: Optional[crypto.SessionNonce]
-		self.failed_code = None  # type: Optional[ErrorCode]
-		self.failed_callback = None  # type: Optional[Callable[[UnprovisionedDevice,], None]]
+		self.device_key: Optional[crypto.DeviceKey] = None
+		self.session_key: Optional[crypto.SessionKey] = None
+		self.session_nonce: Optional[crypto.SessionNonce] = None
+		self.failed_code: Optional[ErrorCode] = None
+		self.failed_callback: Optional[Callable[[UnprovisionedDevice, ], None]] = None
 
 	def _opened_event(self):
 		self.worker_queue.put(ProvisioningEvent.Connected)
@@ -640,7 +641,6 @@ class UnprovisionedDevice:
 		self.worker_queue.put(ProvisioningEvent.Start)
 
 	def handle_event(self, provisioning_event: ProvisioningEvent):
-		print("test")
 		self.last_event = provisioning_event
 		if provisioning_event == ProvisioningEvent.Invite:
 			print(f"inviting {self.device_uuid}")
@@ -785,11 +785,11 @@ class UnprovisionedDevice:
 
 	def do_send_public_key(self):
 		self.private_key = crypto.ECCPrivateKey.generate()
+		if self.public_key_option == PublicKeyOption.YesOOB:
+			self._get_oob_public_key()
 		pdu = PublicKeyPDU(self.private_key.public_key().point)
 		self.confirmation_packets.prov_public_key = pdu
 		self.pb_bearer.send_prov_pdu(pdu)
-		if self.public_key_option == PublicKeyOption.YesOOB:
-			self._get_oob_public_key()
 
 	def handle_capabilities(self, pdu: Capabilities):
 		self.capabilities = pdu
@@ -806,26 +806,18 @@ class UnprovisionedDevice:
 		self.last_seen = datetime.datetime.now()
 		if pdu.pdu_type == PDUType.Capabilities:
 			self.handle_capabilities(cast(Capabilities, pdu))
-			return
-
-		if pdu.pdu_type == PDUType.PublicKey:
+		elif pdu.pdu_type == PDUType.PublicKey:
 			self.handle_public_key(cast(PublicKeyPDU, pdu))
-			return
-
-		if pdu.pdu_type == PDUType.Confirmation:
+		elif pdu.pdu_type == PDUType.Confirmation:
 			self.handle_confirmation(cast(Confirmation, pdu))
-			return
-
-		if pdu.pdu_type == PDUType.Random:
+		elif pdu.pdu_type == PDUType.Random:
 			self.handle_random(cast(Random, pdu))
-			return
-
-		if pdu.pdu_type == PDUType.Complete:
+		elif pdu.pdu_type == PDUType.Complete:
 			self.handle_complete()
-			return
-
-		if pdu.pdu_type == PDUType.Failed:
+		elif pdu.pdu_type == PDUType.Failed:
 			self.handle_failed(cast(Failed, pdu).error_code)
+		else:
+			raise ValueError(f"unhandled pdu type {pdu.pdu_type}")
 
 	def handle_failed(self, error_code: ErrorCode) -> None:
 		self.failed_code = error_code
@@ -850,7 +842,7 @@ class UnprovisionedDevice:
 
 	def update_beacon(self, new_beacon: beacon.UnprovisionedBeacon):
 		if new_beacon.dev_uuid != self.device_uuid:
-			raise ValueError("new beacon dev_uuid does not match set uuid")
+			raise ValueError(f"new beacon dev_uuid does not match set uuid {new_beacon.dev_uuid} != {self.device_uuid}")
 		if new_beacon.last_seen < self.last_seen:
 			raise ValueError("incoming beacon is older than last_seen")  # beacon is old
 		self.last_seen = new_beacon.last_seen
@@ -874,7 +866,7 @@ class UnprovisionedDevicesCollection:
 	DEFAULT_TIMEOUT = datetime.timedelta(minutes=1)
 
 	def __init__(self, timeout=DEFAULT_TIMEOUT):
-		self.unprovisioned_devices = list()  # type: List[UnprovisionedDevice]
+		self.unprovisioned_devices: List[UnprovisionedDevice] = list()
 		self.timeout = timeout
 		self.on_new_device: Optional[Callable[[UnprovisionedDevice, ], None]] = None
 
@@ -921,7 +913,6 @@ class Provisioner:
 		device = self.unprovisioned_devices.get(device_uuid)
 		device.provision_on_connect = True
 		device.open()
-		print("start")
 		return device
 
 	def handle_beacon(self, new_beacon: beacon.UnprovisionedBeacon) -> UnprovisionedDevice:

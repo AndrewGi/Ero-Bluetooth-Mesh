@@ -1,12 +1,13 @@
+import json
 from uuid import UUID
 import sys
 if __name__ == "__main__":
-	from bt_mesh import mesh, prov, beacon
+	from bt_mesh import mesh, prov, beacon, network
 	from bt_mesh.config import config_client
 	from bt_mesh.bearers import bleson_bearer
 	from bt_mesh.bearers.pb_adv import AdvBearer, Link
 else:
-	from .bt_mesh import mesh, prov, beacon
+	from .bt_mesh import mesh, prov, beacon, network
 	from .bt_mesh.bearers.pb_adv import AdvBearer, Link
 	from .bt_mesh.config import config_client
 	from .bt_mesh.bearers import bleson_bearer
@@ -23,30 +24,69 @@ class Session:
 		self.provisioner.unprovisioned_devices.on_new_device = self.on_new_device
 		self.provision_all = False
 		self.running = True
+		self.mesh_network: Optional[network.Network] = None
+		self.network_filename: Optional[str] = None
+
+	def load_network(self, filename: str) -> None:
+		self.info(f"loading network '{filename}")
+		if self.mesh_network:
+			self.warning("overwriting previously loaded network...")
+		try:
+			with open(filename, "r") as json_file:
+				self.mesh_network = network.Network.from_dict(json.load(json_file))
+		except FileNotFoundError as e:
+			self.error(f"'{filename}' not found!")
+		self.network_filename = filename
+
+	def save_network(self, filename: str) -> None:
+		self.info(f"saving network to '{filename}'")
+		if not self.mesh_network:
+			self.error("no mesh network to save")
+			return
+		with open(filename, "w") as json_file:
+			json.dump(self.mesh_network.to_dict(), json_file)
+		self.network_filename = filename
 
 	def on_new_device(self, new_device: prov.UnprovisionedDevice) -> None:
-		self.print(f"new device! {new_device.device_uuid}")
+		self.info(f"new device! {new_device.device_uuid}")
 		if self.provision_all:
 			self.provision(new_device.device_uuid)
 
 	def on_provision_failed(self, device: prov.UnprovisionedDevice) -> None:
-		self.print(f"provisioned failed for {device.device_uuid}")
+		self.error(f"provisioned failed for {device.device_uuid}")
 
 	def handle_beacon(self, new_beacon: beacon.Beacon) -> None:
 		if new_beacon.beacon_type == beacon.BeaconType.UnprovisionedDevice:
 			self.provisioner.handle_beacon(cast(beacon.UnprovisionedBeacon, new_beacon))
 
+	def print_ansi(self, ansi_code: str, line: str) -> None:
+		self.print(f"\033[{ansi_code}m{line}\033[0m")
+
+	def warning(self, line: str) -> None:
+		self.print_ansi("93", line)
+
+	def error(self, line: str) -> None:
+		self.print_ansi("91", line)
+
+	def info(self, line: str) -> None:
+		self.print_ansi("30;1", line)
+
+	def good(self, line: str) -> None:
+		self.print_ansi("32", line)
+
 	def print(self, line: str) -> None:
 		print(line)
 
 	def provision(self, uuid: UUID) -> None:
-		self.print(f"provisioning {uuid}...")
+		self.info(f"provisioning {uuid}...")
 		device = self.provisioner.unprovisioned_devices.get(uuid)
 		device.failed_callback = self.on_provision_failed
 		Link.set_link(device, self.bearer)
 		self.provisioner.provision(uuid)
 		with device.event_condition:
 			device.event_condition.wait(device.done)
+		self.info(f"done provisioning {uuid}")
+		if device.done
 
 	def cli_provision(self, args: List[str]) -> None:
 		assert len(args) == 1
@@ -64,7 +104,7 @@ class Session:
 		if args[0] == "provision":
 			self.cli_provision(args[1:])
 		else:
-			self.print(f"unrecognized command {args}")
+			self.error(f"unrecognized command {args}")
 
 
 class CLIHandler:
@@ -98,7 +138,6 @@ def main() -> None:
 	session = Session(bearer)
 	if sys.argv[1] == "-pall":
 		session.provision_all = True
-	print("ready")
 	while session.running:
 		line = input()
 		session.handle_line(line)

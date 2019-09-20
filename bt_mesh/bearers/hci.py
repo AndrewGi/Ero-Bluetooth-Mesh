@@ -1,6 +1,6 @@
 from typing import *
 import enum
-import bleson
+import abc
 
 class OGF(enum.IntEnum):
 	LEController = 0x80
@@ -19,6 +19,10 @@ class HCICommand:
 	def __str__(self) -> str:
 		return f"{int(self.ogf):2x} {int(self.ogf):4x} {' '.join(hex(i) for i in self.data)}"
 
+class ToCommand(abc.ABC):
+	@abstractmethod
+	def to_command(self) -> HCICommand:
+		pass
 class Commands:
 	class SetAdvertisingEnable:
 		__slots__ = "enable",

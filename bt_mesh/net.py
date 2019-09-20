@@ -48,10 +48,10 @@ class PDU:
 	def obfuscate_and_encrypt(self, privacy_key: crypto.PrivacyKey, iv_index: IVIndex) -> \
 			Tuple[bytes, bytes]:
 		"""
-
-		:param privacy_key:
-		:param nonce:
-		:param iv_index:
+		Obfuscates the PDU header and encrypts the transport pdu
+		the returned bytes can be concatenated and sent to the network
+		:param privacy_key: Privacy key for encrypting
+		:param iv_index: IV index used for sending
 		:return: obfuscated and encrypted (in that order) data
 		"""
 		encrypted_dst_trans_pdu, net_mic = self.encrypt(privacy_key.key_bytes, iv_index)
@@ -63,6 +63,13 @@ class PDU:
 	@classmethod
 	def deobfuscate(cls, b: bytes, privacy_key: crypto.PrivacyKey, iv_index: IVIndex) -> Tuple[
 		bool, TTL, Seq, UnicastAddress]:
+		"""
+		Deobfuscates raw bytes into header information
+		:param b: raw bytes to debofuscate
+		:param privacy_key: Privacy Key to generate the pecb to deobfuscate
+		:param iv_index: IV Index used in pecb generation
+		:return: CTL, TTL, Sequence Number, Source Address
+		"""
 		privacy_random = b[8:8 + 7]
 		pecb = cls.pecb(privacy_key, iv_index, privacy_random)
 		ctl_ttl, seq, src = struct.unpack("!B3sH", xor_bytes(pecb, b[0:8]))
@@ -70,10 +77,22 @@ class PDU:
 
 	@staticmethod
 	def ivi_nid(b: bytes) -> Tuple[bool, NID]:
+		"""
+		gets the IVI and NID from the first byte
+		:param b: raw ivi_nid bytes (only uses the first byte)
+		:return: IVI, NID
+		"""
 		return (b[0] & 0x80 != 0), NID(b[0] & 0x7F)
 
 	@classmethod
 	def from_bytes(cls, b: bytes, sec_mat: crypto.NetworkSecurityMaterial, iv_index: IVIndex) -> 'PDU':
+		"""
+		Decrypts/Deobfuscates
+		:param b: raw network PDU bytes
+		:param sec_mat: Security Material used to decrypt the PDU
+		:param iv_index: current IV index
+		:return:
+		"""
 		ivi, nid = cls.ivi_nid(b)
 		if ivi != iv_index.ivi():
 			raise ValueError("message ivi does not match iv_index ivi")
