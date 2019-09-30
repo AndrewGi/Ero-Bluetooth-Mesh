@@ -114,21 +114,21 @@ class Key(ByteSerializable):
 	KEY_LEN: int = 16
 	__slots__ = 'key_bytes',
 
-	def __init__(self, key_bytes: bytearray):
+	def __init__(self, key_bytes: bytes):
 		if len(key_bytes) != self.KEY_LEN:
 			raise ValueError(f"key len ({len(key_bytes)} not {self.KEY_LEN} bytes long")
 		self.key_bytes = key_bytes
 
 	@classmethod
 	def from_int(cls, i: int):
-		return cls(bytearray(i.to_bytes(cls.KEY_LEN, byteorder="big")))
+		return cls(i.to_bytes(cls.KEY_LEN, byteorder="big"))
 
 	def hex(self) -> str:
 		return self.key_bytes.hex()
 
 	@classmethod
 	def from_str(cls, s: str) -> 'Key':
-		return cls(bytearray.fromhex(s))
+		return cls(bytes.fromhex(s))
 
 	def __str__(self) -> str:
 		return self.hex()
@@ -144,14 +144,10 @@ class Key(ByteSerializable):
 
 	@classmethod
 	def _random_key(cls) -> 'Key':
-		return cls(bytearray(os.urandom(cls.KEY_LEN)))
+		return cls(os.urandom(cls.KEY_LEN))
 
 	def to_bytes(self) -> bytes:
 		return self.key_bytes
-
-	@classmethod
-	def from_bytes(cls, b: bytes) -> 'Key':
-		return cls(bytearray(b))
 
 
 class AppKey(Key):
@@ -188,6 +184,9 @@ class SessionNonce(Nonce, ABC):
 	def to_bytes(self) -> bytes:
 		return self.nonce
 
+	def as_be_bytes(self) -> bytes:
+		return self.to_bytes()
+
 	@classmethod
 	def from_secret(cls, secret: 'ECDHSharedSecret', provisioning_salt: ProvisioningSalt) -> 'SessionNonce':
 		return cls(k1(provisioning_salt, secret, b"prsn")[:13])
@@ -202,7 +201,7 @@ class SessionKey(Key):
 class NetworkKey(Key):
 	@classmethod
 	def random(cls) -> 'NetworkKey':
-		return cast(cls, cls.random())
+		return cast(cls, cls._random_key())
 
 	def nid_encryption_privacy(self) -> Tuple[NID, EncryptionKey, PrivacyKey]:
 		return k2(self, b'\x00')
@@ -268,7 +267,7 @@ class ECCPublicKey:
 class ECDHSharedSecret(Key):
 	KEY_LEN = 32
 
-	def __init__(self, secret_bytes: bytearray):
+	def __init__(self, secret_bytes: bytes):
 		super().__init__(secret_bytes)
 
 
@@ -300,7 +299,7 @@ def aes_ccm_encrypt(key: Key, nonce: Nonce, data: bytes, mic_len=32, associated_
 	bytes, MIC]:
 	tag_len = mic_len // 8
 	aes_ccm = AESCCM(key.key_bytes, tag_len)
-	raw = aes_ccm.encrypt(nonce, data, associated_data)
+	raw = aes_ccm.encrypt(nonce.as_be_bytes(), data, associated_data)
 	mic = MIC(raw[-tag_len:])
 	return raw[:-tag_len], mic
 
@@ -375,7 +374,7 @@ class NetworkSecurityMaterial(SecurityMaterial):
 		super().__init__(net_key)
 		self.network_id = network_id
 		self.nid = nid
-		self.net_key = net_key
+		self.key = net_key
 		self.encryption_key = encryption_key
 		self.privacy_key = privacy_key
 		self.identity_key = identity_key
@@ -402,7 +401,7 @@ def s1(m: Union[bytes, str]) -> Salt:
 	assert m, "m can not be empty"
 	if isinstance(m, str):
 		m = m.encode()
-	return Salt(aes_cmac(Key(bytearray(b'\x00' * Key.KEY_LEN)), m))
+	return Salt(aes_cmac(Key(b'\x00' * Key.KEY_LEN), m))
 
 
 def k1(salt: Salt, key: Key, info: bytes) -> MAC:
@@ -482,8 +481,8 @@ class KeyIndexSlot(Serializable, ABC):
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
-			"index": self.index,
-			"phase": self.phase,
+			"index": self.index.value,
+			"phase": self.phase.value,
 			"new_key": self.new.key.hex() if self.new else None,
 			"old_key": self.old.key.hex()
 		}
@@ -541,10 +540,10 @@ class NetKeyIndexSlot(KeyIndexSlot):
 
 	@classmethod
 	def from_dict(cls, d: Dict[str, Any]) -> 'NetKeyIndexSlot':
-		new = None if d["new"] is None else NetworkSecurityMaterial.from_key(NetworkKey.from_str(d["new"]))
+		new = None if d["new_key"] is None else NetworkSecurityMaterial.from_key(NetworkKey.from_str(d["new_key"]))
 
 		return cls(index=NetKeyIndex(d["index"]), phase=KeyRefreshPhase(d["phase"]),
-				   new=new, old=NetworkSecurityMaterial.from_key(NetworkKey.from_str(d["old"])))
+				   new=new, old=NetworkSecurityMaterial.from_key(NetworkKey.from_str(d["old_key"])))
 
 
 class GlobalContext(Serializable):
@@ -557,6 +556,7 @@ class GlobalContext(Serializable):
 		self.iv_updating = iv_updating
 		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
 		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
+		self.nets[0] = primary_net
 
 	@classmethod
 	def new(cls) -> 'GlobalContext':
@@ -590,14 +590,14 @@ class GlobalContext(Serializable):
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
-			"iv_index": self.iv_index,
+			"iv_index": self.iv_index.value,
 			"iv_updating": self.iv_updating,
 			"apps": [d.to_dict() for d in self.apps.values()],
 			"nets": [d.to_dict() for d in self.nets.values()]
 		}
 
 	@classmethod
-	def from_dict(cls, d: Dict[str, Any]):
+	def from_dict(cls, d: Dict[str, Any]) -> 'GlobalContext':
 		primary = NetKeyIndexSlot.from_dict(d["nets"][0])
 		context = cls(IVIndex(d["iv_index"]), primary)
 		for raw_net in d["nets"][1:]:
@@ -607,6 +607,8 @@ class GlobalContext(Serializable):
 		for raw_app in d["apps"]:
 			app = AppKeyIndexSlot.from_dict(raw_app)
 			context.apps[cast(AppKeyIndex, app.index)] = app
+
+		return context
 
 	def get_nid_rx_keys(self, nid: NID) -> Generator[Tuple[NetKeyIndex, NetworkSecurityMaterial], None, None]:
 		for slot in self.nets.values():

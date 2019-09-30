@@ -235,12 +235,15 @@ class Random(PDU):
 	def __repr__(self) -> str:
 		return self.random_data.hex()
 
+class ProvisioningDataFlags(enum.IntFlag):
+	KeyRefresh = 0
+	IVUpdate = 1
 
 class ProvisioningData:
 	STRUCT = struct.Struct("16sHBLH")
 	__slots__ = "network_key", "key_index", "flags", "iv_index", "unicast_address"
 
-	def __init__(self, network_key: crypto.NetworkKey, key_index: crypto.NetKeyIndex, flags: int,
+	def __init__(self, network_key: crypto.NetworkKey, key_index: crypto.NetKeyIndex, flags: ProvisioningDataFlags,
 				 iv_index: crypto.IVIndex,
 				 unicast_address: mesh.UnicastAddress):
 		self.network_key = network_key
@@ -250,8 +253,8 @@ class ProvisioningData:
 		self.unicast_address = unicast_address
 
 	def to_bytes(self) -> bytes:
-		return self.STRUCT.pack(self.network_key.key_bytes, self.key_index, self.flags, self.iv_index,
-								self.unicast_address)
+		return self.STRUCT.pack(self.network_key.key_bytes, self.key_index.value, self.flags.value, self.iv_index.value,
+								self.unicast_address.value)
 
 	def encrypt(self, key: crypto.SessionKey, nonce: crypto.SessionNonce) -> 'EncryptedProvisioningData':
 		data, mic = crypto.aes_ccm_encrypt(key, nonce, self.to_bytes(), mic_len=8 * 8)
@@ -260,7 +263,7 @@ class ProvisioningData:
 	@classmethod
 	def from_bytes(cls, b: bytes):
 		key, index, flags, iv_index, addr = cls.STRUCT.unpack(b)
-		return cls(crypto.NetworkKey(key), crypto.NetKeyIndex(index), flags, crypto.IVIndex(iv_index),
+		return cls(crypto.NetworkKey(key), crypto.NetKeyIndex(index), ProvisioningDataFlags(flags), crypto.IVIndex(iv_index),
 				   mesh.UnicastAddress(addr))
 
 
@@ -272,7 +275,7 @@ class EncryptedProvisioningData(PDU):
 	def __init__(self, data: bytes, mic: mesh.MIC):
 		super().__init__(PDUType.Data)
 		if len(data) != self.DATA_LEN:
-			raise ValueError("invalid data length")
+			raise ValueError(f"invalid data length (expected {self.DATA_LEN} got {len(data)}")
 		if mic.mic_len() != self.MIC_LEN * 8:
 			raise ValueError("invalid mic length")
 		self.encrypted_data = data
@@ -497,9 +500,9 @@ class AuthValue:
 		self.oob_data = oob_data
 
 	def to_bytes(self) -> bytes:
-		if self.oob_type == OOBAction:
+		if self.oob_type == InputOOBAction.NoAction or self.oob_type == OutputOOBAction.NoAction:
 			return bytes(self.AUTH_VALUE_LEN)
-		pass
+		raise NotImplementedError()
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'AuthValue':
@@ -557,11 +560,15 @@ class ConfirmationPackets:
 	def confirmation_input(self) -> bytes:
 		if not self.is_ready():
 			raise ValueError("missing confirmation packets")
-		return self.prov_invite.to_bytes() + self.prov_capabilities.to_bytes() + self.prov_start.to_bytes() + self.prov_public_key.to_bytes() + self.device_public_key.to_bytes()
+		return self.prov_invite.parameters_to_bytes() + self.prov_capabilities.parameters_to_bytes() + self.prov_start.parameters_to_bytes() + self.prov_public_key.parameters_to_bytes() + self.device_public_key.parameters_to_bytes()
 
 	def confirmation_salt(self) -> ConfirmationSalt:
 		inp = self.confirmation_input()
-		print("input: " + inp.hex())
+		print("input: ")
+		print(f'[0]   {inp[:64].hex()}')
+		print(f'[64]  {inp[64:128].hex()}')
+		print(f'[128] {inp[128:].hex()}')
+		# assert len(inp) == 145, f"expect 145 byte long confirmation input, got {len(inp)}"
 		return ConfirmationSalt(crypto.s1(inp))
 
 
@@ -570,7 +577,7 @@ class ProvisioningEvent(enum.IntEnum):
 	Open = 1
 	Invite = 2
 	Connected = 3
-	Disconnected = 4
+	Fail = 4
 	Capabilities = 5
 	Start = 6
 	DevicePublicKey = 7
@@ -589,6 +596,7 @@ class UnprovisionedDevice:
 		self.last_beacon = first_beacon
 		self.pb_bearer: Optional[ProvisionerBearer] = None
 		self.invited = False
+		self.connected = False
 		self.provision_on_connect = False
 		self.worker_queue = queue.Queue()
 		self.worker = threading.Thread(target=self.worker_func)
@@ -628,6 +636,7 @@ class UnprovisionedDevice:
 		self.failed_callback: Optional[Callable[[UnprovisionedDevice, ], None]] = None
 
 	def _opened_event(self):
+		self.connected = True
 		self.worker_queue.put(ProvisioningEvent.Connected)
 
 	def open(self):
@@ -637,54 +646,59 @@ class UnprovisionedDevice:
 		self.pb_bearer.open()
 		self.worker_queue.put(ProvisioningEvent.Connected)
 
+	def log_print(self, msg: str) -> None:
+		print(msg)
+
 	def start(self):
 		self.worker_queue.put(ProvisioningEvent.Start)
 
 	def handle_event(self, provisioning_event: ProvisioningEvent):
 		self.last_event = provisioning_event
 		if provisioning_event == ProvisioningEvent.Invite:
-			print(f"inviting {self.device_uuid}")
+			self.log_print(f"inviting {self.device_uuid}")
 			self.do_invite()
 		elif provisioning_event == ProvisioningEvent.Open:
-			print(f"opening {self.device_uuid}")
+			self.log_print(f"opening {self.device_uuid}")
 			self.do_open()
 		elif provisioning_event == ProvisioningEvent.Connected:
-			print(f"{self.device_uuid} connected!")
+			self.log_print(f"{self.device_uuid} connected!")
 			if self.provision_on_connect:
 				self.invite()
 		elif provisioning_event == ProvisioningEvent.Capabilities:
-			print(f"{self.device_uuid} capabilities received!")
+			self.log_print(f"{self.device_uuid} capabilities received!")
 			if self.provision_on_connect:
 				self.start()
 		elif provisioning_event == ProvisioningEvent.Start:
-			print(f"{self.device_uuid} starting provision process...")
+			self.log_print(f"{self.device_uuid} starting provision process...")
 			self.do_start()
 		elif provisioning_event == ProvisioningEvent.DevicePublicKey:
-			print(f"{self.device_uuid} got device public key! commencing ECDH...")
+			self.log_print(f"{self.device_uuid} got device public key! commencing ECDH...")
 			self.shared_secret = self.private_key.make_shared_secret(self.device_public_key)
 			if self.provision_on_connect:
 				self.authenticate()
 		elif provisioning_event == ProvisioningEvent.Authenticate:
-			print(f"{self.device_uuid} authenticating")
+			self.log_print(f"{self.device_uuid} authenticating")
 			self.do_authentication()
 		elif provisioning_event == ProvisioningEvent.ProvisionerRandom:
-			print(f"{self.device_uuid} sending provisioning random: {self.prov_random}")
+			self.log_print(f"{self.device_uuid} sending provisioning random: {self.prov_random}")
 			self.do_send_random()
-		elif provisioning_event == ProvisioningEvent.DeviceRandom:
-			print(f"{self.device_uuid} got device random: {self.device_random}")
-			self.check_confirmation()
 		elif provisioning_event == ProvisioningEvent.Distribute:
-			print(f"{self.device_uuid} distributing provisioning data...")
+			self.log_print(f"{self.device_uuid} distributing provisioning data...")
 			self.do_distribute()
 		elif provisioning_event == ProvisioningEvent.Done:
-			print(f"{self.device_uuid} is provisioned! address: {self.primary_address}")
+			self.log_print(f"{self.device_uuid} is provisioned! address: {self.primary_address}")
 			self.done_callback()
+		elif provisioning_event == ProvisioningEvent.Fail:
+			self.log_print(f"{self.device_uuid} Failed! Error Code: {self.failed_code}")
+			if self.failed_callback:
+				self.failed_callback(self)
+
 		with self.event_condition:
 			self.event_condition.notify()
 
 	def do_distribute(self):
 		self.provision_salt = crypto.ProvisioningSalt(
-			crypto.s1(self.confirmation_salt + self.prov_random + self.device_random))
+			crypto.s1(self.confirmation_salt.salt_bytes + self.prov_random.random_data + self.device_random.random_data))
 		self.session_key = crypto.SessionKey.from_secret(self.shared_secret, self.provision_salt)
 		self.session_nonce = crypto.SessionNonce.from_secret(self.shared_secret, self.provision_salt)
 		if not self.get_provisioning_data:
@@ -700,8 +714,9 @@ class UnprovisionedDevice:
 		if self.device_confirmation is None:
 			raise ValueError("device confirmation missing")
 		# TODO: CHECK CONFIRMATIONS
-		computed_device_confirmation = crypto.aes_cmac(self.confirmation_key,
-													   self.device_random + self.auth_value.to_bytes())
+		random_and_auth: bytes = bytes(self.device_random.random_data + self.auth_value.to_bytes())
+		print(random_and_auth)
+		computed_device_confirmation = crypto.aes_cmac(self.confirmation_key, random_and_auth)
 		if computed_device_confirmation != self.device_confirmation:
 			self.bad_auth()
 			return
@@ -710,11 +725,13 @@ class UnprovisionedDevice:
 		self.worker_queue.put(ProvisioningEvent.Distribute)
 
 	def disconnect(self) -> None:
-		self.pb_bearer.close(self.close_reason)
-		self.worker_queue.put(ProvisioningEvent.Disconnected)
+		if self.connected:
+			self.connected = False
+			self.pb_bearer.close(self.close_reason)
+			self.worker_queue.put(ProvisioningEvent.Disconnected)
 
 	def bad_auth(self) -> None:
-		print(f"{self.device_uuid} BAD AUTH VAULE! DISCONNECTING")
+		self.log_print(f"{self.device_uuid} BAD AUTH VAULE! DISCONNECTING")
 		self.close_reason = pb_generic.LinkCloseReason.Fail
 		self.disconnect()
 
@@ -768,7 +785,10 @@ class UnprovisionedDevice:
 			print(item)
 			if not item:
 				break
-			self.handle_event(item)
+			try:
+				self.handle_event(item)
+			finally:
+				self.disconnect()
 			self.worker_queue.task_done()
 
 	def do_send_random(self):
@@ -821,8 +841,9 @@ class UnprovisionedDevice:
 
 	def handle_failed(self, error_code: ErrorCode) -> None:
 		self.failed_code = error_code
-		if self.failed_callback:
-			self.failed_callback(self)
+		self.close_reason = pb_generic.LinkCloseReason.Fail
+		self.worker_queue.put(ProvisioningEvent.Fail)
+		self.disconnect()
 
 	def handle_complete(self) -> None:
 		self.done = True
@@ -852,6 +873,15 @@ class UnprovisionedDevice:
 	def invite(self):
 		self.invited = True
 		self.worker_queue.put(ProvisioningEvent.Invite)
+
+	def __enter__(self) -> None:
+		if self.connected:
+			raise RuntimeError("device already connected")
+		self.open()
+
+	def __exit__(self, *_extra) -> None:
+		if self.connected:
+			self.disconnect()
 
 	def __del__(self):
 		if self.pb_bearer:
@@ -908,10 +938,14 @@ class Provisioner:
 
 	def __init__(self) -> None:
 		self.unprovisioned_devices = UnprovisionedDevicesCollection()
+		self.get_provisioning_data: Optional[Callable[UnprovisionedDevice, ProvisioningData]] = None
+		self.failed_callback: Optional[Callable[UnprovisionedDevice, None]] = None
 
 	def provision(self, device_uuid: UUID) -> UnprovisionedDevice:
 		device = self.unprovisioned_devices.get(device_uuid)
 		device.provision_on_connect = True
+		device.get_provisioning_data = self.get_provisioning_data
+		device.failed_callback = self.failed_callback
 		device.open()
 		return device
 

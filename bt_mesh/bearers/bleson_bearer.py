@@ -11,7 +11,7 @@ class BlesonBearer(pb_adv.AdvBearer):
 	def __init__(self):
 		super().__init__()
 		self.adapter = bleson.get_provider().get_adapter()
-		self.adapter.adv_type = 0x03
+		self.adapter.adv_type = 0x03 # ADV_NONCONN_IND
 		self.adapter.set_advertising_parameter()
 		self.observer = bleson.Observer(self.adapter)
 		self.observer.on_advertising_data = self.on_advertisement
@@ -38,7 +38,7 @@ class BlesonBearer(pb_adv.AdvBearer):
 		return pb_adv.bearer.BearerType.Advertisement
 
 	def send_pb_adv(self, pb_adv_pdu: bytes, repeat: Optional[bool] = False):
-		print(f"PB_ADV: {pb_adv_pdu.hex()}")
+		print(f"PB_ADV: {pb_adv_pdu.hex()} repeat: {repeat}")
 		self._send_adv(bleson.Advertisement(pb_adv_pdu=pb_adv_pdu), repeat)
 
 	def send_network_pdu(self, network_pdu: bytes, parameters: RetransmitParameters):

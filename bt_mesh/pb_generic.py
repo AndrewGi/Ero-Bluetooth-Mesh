@@ -2,7 +2,7 @@ import enum
 import struct
 from typing import *
 from uuid import UUID
-
+from .mesh import *
 crc8_table = [
 	0x00, 0x91, 0xe3, 0x72, 0x07, 0x96, 0xe4, 0x75,
 	0x0e, 0x9f, 0xed, 0x7c, 0x09, 0x98, 0xea, 0x7b,
@@ -74,7 +74,7 @@ class GenericProvisioningPDU:
 	MAX_LEN = 24
 
 	def __init__(self):
-		self.transaction_number = None
+		self.transaction_number: Optional[TransactionNumber] = None
 
 	def payload(self) -> bytes:
 		return bytes()

@@ -1,6 +1,6 @@
 from typing import *
 from .mesh import *
-from . import crypto
+from . import crypto, prov
 
 
 class RemoteDevice(Serializable):
@@ -50,6 +50,9 @@ class AddressSpace(Serializable):
 		return sorted(self.unicasts.keys())
 
 	def find_empty_block(self, element_count: int) -> UnicastAddress:
+		if not self.unicasts:
+			# if no unicast addresses yet, give out the address 1
+			return UnicastAddress(0)
 		index = 0
 		addresses = self.addresses()
 		while index < len(addresses) - 1:
@@ -74,6 +77,8 @@ class AddressSpace(Serializable):
 		return device
 
 	def verify_space(self) -> None:
+		if not self.unicasts:
+			return
 		addresses = self.addresses()
 		current_end = self.unicasts[addresses[0]].last_element_address()
 		for address in addresses[1:]:
@@ -104,29 +109,25 @@ class AddressSpace(Serializable):
 
 
 class Network(Serializable):
-	__slots__ = "global_context", "addresses", "end_address"
+	__slots__ = "global_context", "addresses"
 
 	# TODO: Something better than end_address
-	def __init__(self, global_context: crypto.GlobalContext, address_space: AddressSpace, end_address: UnicastAddress):
+	def __init__(self, global_context: crypto.GlobalContext, address_space: AddressSpace):
 		self.addresses: AddressSpace = address_space
 		self.global_context: crypto.GlobalContext = global_context
-		self.end_address = end_address
+
+	@classmethod
+	def new(cls) -> 'Network':
+		return cls(crypto.GlobalContext.new(), AddressSpace())
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
 			"global_context": self.global_context.to_dict(),
-			"remote_devices": {device.primary_address: device.to_dict() for device in self.remote_devices.values()},
+			"address_space": self.addresses.to_dict()
 		}
 
 	@classmethod
 	def from_dict(cls, d: Dict[str, Any]) -> 'Network':
 		global_context = crypto.GlobalContext.from_dict(d["global_context"])
-		remote_devices = dict()
-		last_address = Address(0)
-		for raw_device in d["remote_devices"]:
-			device = RemoteDevice.from_dict(raw_device)
-			remote_devices[device.primary_address] = device
-			if device.last_element_address() > last_address:
-				last_address = device.last_element_address()
-
-		return cls(global_context, remote_devices, last_address)
+		address_space = AddressSpace.from_dict(d["address_space"])
+		return cls(global_context, address_space)

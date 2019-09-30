@@ -97,6 +97,13 @@ class Integer(ByteSerializable):
 	def __lt__(self, other: IntOperand) -> bool:
 		return self.value < self._value(other)
 
+	def __repr__(self) -> 'str':
+		return f"{self.__class__.__name__}({self.value})"
+
+	def __hash__(self) -> bytes:
+		return hash(self.value)
+
+
 
 DEFAULT_ENDIAN = "little"
 

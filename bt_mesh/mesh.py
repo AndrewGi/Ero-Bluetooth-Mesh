@@ -52,24 +52,21 @@ def seq_bytes(seq: Seq):
 	return seq.to_bytes(3, byteorder="big")
 
 
-class IVIndex(int):
+class IVIndex(U32):
 	IV_MAX = 2 ** 32 - 1
 
-	def __init__(self, index: int):
-		super().__init__(index)
-
 	def ivi(self) -> bool:
-		return self % 2 == 1
+		return self.value % 2 == 1
 
 	def next_iv(self) -> 'IVIndex':
 		if self == self.IV_MAX:
 			raise OverflowError("iv index at max")
-		return IVIndex(self + 1)
+		return self + 1
 
 	def prev_iv(self) -> 'IVIndex':
 		if self == type(self)(0):
 			raise OverflowError("iv index at min")
-		return IVIndex(self - 1)
+		return self - 1
 
 
 class MIC:

@@ -48,7 +48,7 @@ class AdvPDU:
 	def from_bytes(cls, b: bytes) -> 'AdvPDU':
 		link_id, transaction_number = cls.STRUCT.unpack(b[:cls.STRUCT.size])
 		pdu = pb_generic.GenericProvisioningPDU.from_bytes(b[cls.STRUCT.size:])
-		return cls(link_id, transaction_number, pdu)
+		return cls(LinkID(link_id), prov.mesh.TransactionNumber(transaction_number), pdu)
 
 
 class Links:
@@ -63,15 +63,33 @@ class Links:
 		del self.links[link_id]
 
 	def send_pb_adv(self, pdu: bytes, repeat: bool) -> None:
-		self.send_pb_adv(pdu, repeat)
+		self.link_bearer.send_pb_adv(pdu, repeat)
 
-	def recv_pb_adv(self, adv_pdu: AdvPDU) -> None:
+	def recv_pb_adv(self, raw_pdu: bytes) -> None:
+		adv_pdu = AdvPDU.from_bytes(raw_pdu)
 		link_id = adv_pdu.link_id
-		if link_id in self.links.keys():
-			self.links[link_id].handle_pb(adv_pdu)
-		else:
+		try:
+			self.links[link_id].incoming_adv_pdus.put(adv_pdu)
+		except KeyError:
 			# link id is not in collection
 			pass
+
+	def new_link(self, device_uuid: UUID) -> 'Link':
+		"""
+		Generates a new link for a given device UUID.
+
+		:param device_uuid:
+		:return: An unopened link with a random link id
+		"""
+		assert len(self.links) < Link.END_LINK_ID / 4, "sanity check for link leak"
+		current_link_ids = self.links.keys()
+		new_id = Link.random_link_id()
+		while new_id in current_link_ids:
+			new_id = Link.random_link_id()
+		link = Link(new_id, device_uuid)
+		self.links[new_id] = link
+		link.send_pb_adv = self.send_pb_adv
+		return link
 
 
 class Link(prov.ProvisionerBearer):
@@ -88,7 +106,7 @@ class Link(prov.ProvisionerBearer):
 	@classmethod
 	def set_link(cls, unprovisioned_device: prov.UnprovisionedDevice, adv_bearer: AdvBearer):
 		unprovisioned_device.set_bearer(Link(cls.random_link_id(), unprovisioned_device.device_uuid))
-		unprovisioned_device.pb_bearer.link_bearer = adv_bearer
+		cast(Link, unprovisioned_device.pb_bearer).send_pb_adv = adv_bearer.send_pb_adv
 		adv_bearer.recv_pb_adv = unprovisioned_device.pb_bearer.recv_pb_adv_pdu
 
 	@classmethod
@@ -155,17 +173,19 @@ class Link(prov.ProvisionerBearer):
 			retries = self.RETRANSMISSION_TRIES
 		for i in range(retries):
 			for pdu in pdus:
+				if self.closed():
+					return # Link closed
 				self.send_adv(pdu)
 			if link_ack:
 				if self.link_acked:
-					return True
+					return
 				with self.link_ack_cv:
 					if self.link_ack_cv.wait(self.RETRANSMISSION_DELAY):
-						return True
+						return
 			elif not transaction_ack:
 				time.sleep(self.RETRANSMISSION_DELAY)
 			elif self.message_did_ack or self.wait_for_ack(self.RETRANSMISSION_DELAY):
-				return True
+				return
 		self.is_open = False
 		if (not transaction_ack) and (not link_ack):
 			return
@@ -174,11 +194,15 @@ class Link(prov.ProvisionerBearer):
 	def open(self):
 		if self.is_open:
 			raise RuntimeError("link already open")
+		if self.closed():
+			raise RuntimeError("link can't be reopened")
 		pdu = self.new_pdu(pb_generic.LinkOpenMessage(self.device_uuid),
 						   transaction_number=prov.mesh.TransactionNumber(0))
-		self.is_open = self.send_with_retries([pdu], link_ack=True)
+		self.send_with_retries([pdu], link_ack=True)
 
 	def handle_link_ack(self, traction_number: prov.mesh.TransactionNumber, ack: pb_generic.TransactionAckPDU):
+		if self.closed():
+			return
 		del ack  # we don't use the message
 		if self.link_acked:
 			return
@@ -202,7 +226,7 @@ class Link(prov.ProvisionerBearer):
 			self.recv_generic_prov_pdu(adv_pdu.generic_prov_pdu)
 
 	def recv_pb_adv_pdu(self, incoming_pdu: bytes):
-		if not self.accept_incoming:
+		if self.closed():
 			# link closed
 			return
 		pdu = AdvPDU.from_bytes(incoming_pdu)
@@ -211,8 +235,11 @@ class Link(prov.ProvisionerBearer):
 			return
 		self.incoming_adv_pdus.put(pdu)
 
+	def closed(self) -> bool:
+		return not self.accept_incoming
+
 	def close(self, reason: pb_generic.LinkCloseReason):
-		if not self.is_open:
+		if self.closed():
 			raise RuntimeError("link already close")
 		self.send_adv(self.new_pdu(pb_generic.LinkCloseMessage(reason)))
 		self.is_open = False
@@ -222,4 +249,5 @@ class Link(prov.ProvisionerBearer):
 		self.send_adv(self.new_pdu(pb_generic.LinkAckMessage(), transaction_number=transaction_number))
 
 	def __del__(self):
-		self.close(pb_generic.LinkCloseReason.Fail)
+		if not self.closed():
+			self.close(pb_generic.LinkCloseReason.Fail)
