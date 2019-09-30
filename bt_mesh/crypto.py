@@ -16,7 +16,6 @@ from cryptography.exceptions import InvalidTag
 Salt = NewType("Salt", bytes)
 ProvisioningSalt = NewType("ProvisioningSalt", Salt)
 MAC = NewType("MAC", bytes)
-NetworkID = NewType("NetworkID", int)
 
 
 def data_and_mic_bytes(b: bytes, m: MIC) -> bytes:
@@ -189,7 +188,7 @@ class SessionNonce(Nonce, ABC):
 
 	@classmethod
 	def from_secret(cls, secret: 'ECDHSharedSecret', provisioning_salt: ProvisioningSalt) -> 'SessionNonce':
-		return cls(k1(provisioning_salt, secret, b"prsn")[:13])
+		return cls(k1(provisioning_salt, secret, b"prsn")[-13:])
 
 
 class SessionKey(Key):

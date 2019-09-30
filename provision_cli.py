@@ -64,12 +64,12 @@ class Session:
 		net_sm = self.mesh_network.global_context.get_net(net_id)
 		network_key = net_sm.old.key
 		ivi_index = self.mesh_network.global_context.iv_index
-		flags = prov.ProvisioningDataFlags(0)
+		flags = mesh.NetworkStateFlags(0)
 		if self.mesh_network.global_context.iv_updating:
-			flags |= prov.ProvisioningDataFlags.IVUpdate
+			flags |= mesh.NetworkStateFlags.IVUpdate
 		if net_sm.phase==prov.crypto.KeyRefreshPhase.Phase2:
 			network_key = net_sm.new
-			flags |= prov.ProvisioningDataFlags.KeyRefresh
+			flags |= mesh.NetworkStateFlags.KeyRefresh
 		return prov.ProvisioningData(network_key, net_id, flags, ivi_index, address)
 
 	def on_provision_failed(self, device: prov.UnprovisionedDevice) -> None:

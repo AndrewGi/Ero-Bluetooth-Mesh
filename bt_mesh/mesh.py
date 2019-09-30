@@ -47,10 +47,17 @@ Seq = NewType("Seq", int)
 SeqAuth = NewType("SeqAuth", int)
 SeqZero = NewType("SeqZero", int)
 
+class NetworkID(U64):
+	byteorder = "big"
+
 
 def seq_bytes(seq: Seq):
 	return seq.to_bytes(3, byteorder="big")
 
+
+class NetworkStateFlags(IntFlag):
+	KeyRefresh = 0
+	IVUpdate = 1
 
 class IVIndex(U32):
 	IV_MAX = 2 ** 32 - 1

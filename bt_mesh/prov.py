@@ -235,12 +235,9 @@ class Random(PDU):
 	def __repr__(self) -> str:
 		return self.random_data.hex()
 
-class ProvisioningDataFlags(enum.IntFlag):
-	KeyRefresh = 0
-	IVUpdate = 1
 
 class ProvisioningData:
-	STRUCT = struct.Struct("16sHBLH")
+	STRUCT = struct.Struct("!16sHBLH")
 	__slots__ = "network_key", "key_index", "flags", "iv_index", "unicast_address"
 
 	def __init__(self, network_key: crypto.NetworkKey, key_index: crypto.NetKeyIndex, flags: ProvisioningDataFlags,
@@ -257,6 +254,7 @@ class ProvisioningData:
 								self.unicast_address.value)
 
 	def encrypt(self, key: crypto.SessionKey, nonce: crypto.SessionNonce) -> 'EncryptedProvisioningData':
+		print(f"key: {key.hex()} nonce: {nonce.as_be_bytes().hex()}")
 		data, mic = crypto.aes_ccm_encrypt(key, nonce, self.to_bytes(), mic_len=8 * 8)
 		return EncryptedProvisioningData(data, mic)
 
@@ -318,6 +316,17 @@ class Failed(PDU):
 	def parameters_from_bytes(cls, b: bytes) -> 'Failed':
 		return cls(ErrorCode(b[0]))
 
+class Complete(PDU):
+	def __init__(self) -> None:
+		super().__init__(PDUType.Complete)
+
+	def parameters_to_bytes(self) -> bytes:
+		return bytes()
+
+	@classmethod
+	def parameters_from_bytes(cls, b: bytes) -> 'Complete':
+		assert len(b) == 0
+		return cls()
 
 pdu_classes[PDUType.Invite] = Invite
 pdu_classes[PDUType.Capabilities] = Capabilities
@@ -329,7 +338,7 @@ pdu_classes[PDUType.Random] = Random
 pdu_classes[PDUType.Data] = EncryptedProvisioningData
 pdu_classes[PDUType.Confirmation] = Confirmation
 pdu_classes[PDUType.Failed] = Failed
-
+pdu_classes[PDUType.Complete] = Complete
 
 def segment_pdu(pdu: PDU, max_mtu: int) -> Generator[pb_generic.GenericProvisioningPDU, None, None]:
 	pdu_bytes = pdu.to_bytes()
