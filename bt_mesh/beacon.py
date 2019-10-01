@@ -52,9 +52,9 @@ class SecureBeacon(Beacon):
 	@classmethod
 	def beacon_from_bytes(cls, b: bytes) -> 'SecureBeacon':
 		flags = NetworkStateFlags(b[0])
-		network_id = NetworkID.from_bytes(b[1:5])
-		iv_index = IVIndex.from_bytes(b[5:9])
-		auth_value = SecureBeaconAuthValue.from_bytes(b[9:])
+		network_id = NetworkID.from_bytes(b[1:9])
+		iv_index = IVIndex.from_bytes(b[9:13])
+		auth_value = SecureBeaconAuthValue.from_bytes(b[13:])
 		return cls(flags, network_id, iv_index, auth_value)
 
 

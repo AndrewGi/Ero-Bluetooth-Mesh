@@ -1,6 +1,6 @@
 from queue import Queue
 from .mesh import *
-from . import bearer, crypto, net, access, transport, beacon, replay, model
+from . import bearer, crypto, net, access, transport, beacon, replay, model, network
 
 
 class MessageContext:
@@ -37,8 +37,7 @@ class Stack:
 	DEFAULT_TTL = TTL(0x10)
 	DEFAULT_QUEUE_SIZE = 25
 
-	def __init__(self, stack_bearer: bearer.Bearer, global_context: crypto.GlobalContext,
-				 local_context: crypto.LocalContext, queue_max_sizes: Optional[int] = None):
+	def __init__(self, stack_bearer: bearer.Bearer, mesh_network: network.Network, queue_max_sizes: Optional[int] = None):
 		"""
 		Initaized a Bluetooth Mesh stack for decode and encoding messages from network layer to access layer
 
@@ -50,8 +49,7 @@ class Stack:
 		if not queue_max_sizes:
 			queue_max_sizes = self.DEFAULT_QUEUE_SIZE
 		self.stack_bearer = stack_bearer
-		self.global_context = global_context
-		self.local_context = local_context
+		self.mesh_network = mesh_network
 
 		self.incoming_network_pdu_bytes_queue: Queue[bytes] = Queue(maxsize=queue_max_sizes)
 		self.incoming_access_message_queue: Queue[access.AccessMessage] = Queue(maxsize=queue_max_sizes)
@@ -63,7 +61,7 @@ class Stack:
 		self.reassemblers = transport.Reassemblers()
 
 	def iv_index(self) -> IVIndex:
-		return self.global_context.iv_index
+		return self.mesh_network.global_context.iv_index
 
 	def set_bearer(self, stack_bearer: bearer.Bearer) -> None:
 		"""
@@ -91,13 +89,16 @@ class Stack:
 	def _handle_encrypted_access(self, pdu: transport.UpperEncryptedAccessPDU, context: MessageContext) -> None:
 		if not pdu.akf():
 			context.device_key = True
-			upper_access = pdu.decrypt(context.device_nonce(), self.local_context.device_sm)
+			device_sm = crypto.DeviceSecurityMaterial(cast(network.RemoteDevice, self.mesh_network.addresses.unicasts[context.src]).device_key)
+			if not device_sm:
+				raise PermissionError(f"missing device security materials for {context.src}")
+			upper_access = pdu.decrypt(context.device_nonce(), device_sm)
 			self._handle_unencrypted_access(upper_access, context)
 			return
 
 		context.device_key = False
 		app_nonce = context.application_nonce()
-		for index, sm in self.global_context.get_aid_rx_keys(pdu.aid):
+		for index, sm in self.mesh_network.global_context.get_aid_rx_keys(pdu.aid):
 			try:
 				access_payload = pdu.decrypt(app_nonce, sm)
 				context.app_index = index

@@ -5,6 +5,7 @@ from .. import access, foundation
 from ..access import ModelID
 from threading import Condition
 
+
 class ModelMessage(ByteSerializable, ABC):
 	pass
 
@@ -23,7 +24,7 @@ class EmptyModelMessage(ModelMessage):
 		return cls()
 
 
-HandlerCallable = Callable[[Optional[ModelMessage],], access.AccessMessage]
+HandlerCallable = Callable[[Optional[ModelMessage]], access.AccessMessage]
 
 
 class MessageHandler:
@@ -58,7 +59,8 @@ class Model:
 		pass
 
 	def publish(self, opcode: access.Opcode, msg: ModelMessage) -> None:
-		access.AccessMessage(self.publication.element_address, self.publication.publish_address, self.publication.publish_ttl,
+		access.AccessMessage(self.publication.element_address, self.publication.publish_address,
+							 self.publication.publish_ttl,
 							 opcode, msg.to_bytes(), self.publication.app_key_index, self.publication.net_key_index)
 
 
@@ -67,7 +69,19 @@ class ModelServer(Model):
 
 
 class ModelClient(Model):
-	pass
+	def target(self, address: UnicastAddress, *, dev_key: bool = False, app_key_index: AppKeyIndex = None,
+			   net_key_index: NetKeyIndex = None):
+		if dev_key:
+			assert not app_key_index
+			assert not net_key_index
+			self.publication.net_key_index = None
+			self.publication.app_key_index = AppKeyIndex(0)
+		else:
+			assert app_key_index
+			assert net_key_index
+			self.publication.net_key_index = net_key_index
+			self.publication.app_key_index = app_key_index
+		self.publication.element_address = address
 
 
 class UnknownOpcode(Exception):
@@ -78,7 +92,7 @@ class State:
 	__slots__ = "handlers", "parent"
 
 	def __init__(self):
-		self.handlers: Dict[access.Opcode, HandlerCallable]
+		self.handlers: Dict[access.Opcode, HandlerCallable] = dict()
 		self.parent: Optional[Model] = None
 
 	def add_handler(self, opcode: access.Opcode, handler: Callable) -> None:
@@ -86,8 +100,8 @@ class State:
 			raise ValueError(f"handlers already handling f{str(opcode)}")
 		self.handlers[opcode] = handler
 
-	def opcodes(self) -> List[access.Opcode]:
-		return self.handlers.values()
+	def opcodes(self) -> KeysView[access.Opcode]:
+		return self.handlers.keys()
 
 	def get_handler(self, opcode: access.Opcode) -> HandlerCallable:
 		try:
@@ -186,5 +200,3 @@ class SetStateServer(StatusStateServer, ABC):
 class SetStateClient(GetStateClient, ABC):
 	def set(self, value: Any, ack: Optional[bool] = True) -> None:
 		raise NotImplementedError()
-
-

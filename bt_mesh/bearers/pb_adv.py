@@ -214,7 +214,6 @@ class Link(prov.ProvisionerBearer):
 
 	def handle_pb(self, adv_pdu: AdvPDU):
 		gpcf = adv_pdu.generic_prov_pdu.gpcf()
-		print(f"GPCF: {gpcf} trans#: {adv_pdu.transaction_number}")
 		if gpcf == pb_generic.GPCF.PROVISIONING_BEARER_CONTROL:
 			bearer_control = cast(pb_generic.BearerControlPDU, adv_pdu.generic_prov_pdu)
 			opcode: pb_generic.BearerControlOpcode = bearer_control.opcode

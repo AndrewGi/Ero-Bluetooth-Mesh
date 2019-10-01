@@ -30,7 +30,6 @@ class BlesonBearer(pb_adv.AdvBearer):
 			self.recv_beacon(beacon.Beacon.from_bytes(advertisement.beacon_payload))
 
 		if advertisement.pb_adv_pdu:
-			print(f"RECV: {advertisement.pb_adv_pdu.hex()}")
 			self.recv_pb_adv(advertisement.pb_adv_pdu)
 
 	@classmethod
@@ -38,7 +37,6 @@ class BlesonBearer(pb_adv.AdvBearer):
 		return pb_adv.bearer.BearerType.Advertisement
 
 	def send_pb_adv(self, pb_adv_pdu: bytes, repeat: Optional[bool] = False):
-		print(f"PB_ADV: {pb_adv_pdu.hex()} repeat: {repeat}")
 		self._send_adv(bleson.Advertisement(pb_adv_pdu=pb_adv_pdu), repeat)
 
 	def send_network_pdu(self, network_pdu: bytes, parameters: RetransmitParameters):

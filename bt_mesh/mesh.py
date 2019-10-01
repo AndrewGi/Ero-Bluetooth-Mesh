@@ -116,10 +116,29 @@ class Address(U16):
 			raise ValueError(f"address higher than allowed 16 bit range {addr:x}")
 		super().__init__(addr)
 
+	@classmethod
+	def from_str(cls, s: str) -> Union['GroupAddress', 'VirtualAddress', 'UnicastAddress'] :
+		if "-" in s:
+			# probably virtual address
+			return VirtualAddress(UUID(s))
+		address = cls(int(s, base=16))
+		try:
+			return UnicastAddress(address.value)
+		except ValueError:
+			pass
+
+		try:
+			return GroupAddress(address.value)
+		except ValueError:
+			pass
+
+		raise NotImplementedError(f"unknown address {s}")
+
 
 class GroupAddress(Address):
+	GROUP_MASK = 0xC000
 	def __init__(self, addr: int):
-		if 0xC000 & addr != 0xC000:
+		if self.GROUP_MASK & addr != self.GROUP_MASK:
 			raise ValueError(f"{hex(addr)} is not a group address")
 		super().__init__(addr)
 

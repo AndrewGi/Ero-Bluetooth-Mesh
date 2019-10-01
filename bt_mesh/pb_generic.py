@@ -230,7 +230,6 @@ class BearerControlPDU(GenericProvisioningPDU):
 	@classmethod
 	def control_from_bytes(cls, b: bytes) -> 'BearerControlPDU':
 		opcode = BearerControlOpcode(b[0] >> 2)
-		print(f"opcode: {opcode} b: {b}")
 		return bearer_control_opcode_classes[opcode].bearer_from_bytes(b[1:])
 
 	@staticmethod

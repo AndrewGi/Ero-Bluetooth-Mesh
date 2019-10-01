@@ -4,13 +4,16 @@ from . import crypto, prov
 
 
 class RemoteDevice(Serializable):
-	__slots__ = "primary_address", "element_count", "device_key"
+	__slots__ = "primary_address", "element_count", "device_key", "user_data"
 
 	def __init__(self, primary_address: UnicastAddress, element_count: int,
-				 device_key: Optional[crypto.DeviceKey] = None):
+				 device_key: Optional[crypto.DeviceKey] = None, user_data: Dict[Any, Serializable] = None):
 		self.primary_address = primary_address
 		self.element_count = element_count
 		self.device_key = device_key
+		if not user_data:
+			user_data = dict()
+		self.user_data = user_data
 
 	def primary_element_address(self) -> UnicastAddress:
 		return self.primary_address
@@ -23,16 +26,17 @@ class RemoteDevice(Serializable):
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
-			"primary_address": self.primary_address,
+			"primary_address": self.primary_address.value,
 			"element_count": self.element_count,
-			"device_key": self.device_key.hex() if self.device_key else None
+			"device_key": self.device_key.hex() if self.device_key else None,
+			"user_data": self.user_data
 		}
 
 	@classmethod
 	def from_dict(cls, d: Dict) -> 'RemoteDevice':
 		device_key = crypto.DeviceKey.from_str(d["device_key"]) if "device_key" in d.keys() else None
 		return cls(primary_address=UnicastAddress(d["primary_address"]), element_count=d["element_count"],
-				   device_key=device_key)
+				   device_key=device_key, user_data=d["user_data"])
 
 
 class AddressSpace(Serializable):

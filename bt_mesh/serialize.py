@@ -23,6 +23,12 @@ class Serializable:
 IntOperand = Union['Integer', int]
 
 
+def serialize_dict(d: Dict[str, Serializable]) -> Dict[str, Any]:
+	return {
+		key: value.to_dict() for key, value in d
+	}
+
+
 @total_ordering
 class Integer(ByteSerializable):
 	__slots__ = "value",
@@ -102,7 +108,6 @@ class Integer(ByteSerializable):
 
 	def __hash__(self) -> bytes:
 		return hash(self.value)
-
 
 
 DEFAULT_ENDIAN = "little"
