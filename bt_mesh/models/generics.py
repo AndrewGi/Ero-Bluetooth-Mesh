@@ -1,5 +1,6 @@
 from ..mesh import *
 
+
 class GenericStates:
 	class OnOff(U8, Enum):
 		Off = U8(0x00)
@@ -10,6 +11,7 @@ class GenericStates:
 
 	class DefaultTransitionTime(ByteSerializable):
 		__slots__ = "steps", "resolution"
+
 		def to_bytes(self) -> bytes:
 			pass
 

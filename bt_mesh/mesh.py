@@ -47,6 +47,9 @@ Seq = NewType("Seq", int)
 SeqAuth = NewType("SeqAuth", int)
 SeqZero = NewType("SeqZero", int)
 
+class RSSI(I8):
+	pass
+
 class NetworkID(U64):
 	byteorder = "big"
 

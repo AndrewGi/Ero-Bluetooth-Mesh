@@ -84,8 +84,11 @@ class Links:
 		assert len(self.links) < Link.END_LINK_ID / 4, "sanity check for link leak"
 		current_link_ids = self.links.keys()
 		new_id = Link.random_link_id()
+
+		# Make sure the random link id doesn't exist already in the collection
 		while new_id in current_link_ids:
 			new_id = Link.random_link_id()
+
 		link = Link(new_id, device_uuid)
 		self.links[new_id] = link
 		link.send_pb_adv = self.send_pb_adv
