@@ -36,19 +36,38 @@ class CompanyID(U16):
 	byteorder = "little"
 
 
-SIGCompanyID = CompanyID(0)
+SIGCompanyID = CompanyID()
 
-ProductID = NewType("ProductID", U16)
-VersionID = NewType("VersionID", U16)
 
-NID = NewType("NID", int)
-AID = NewType("AID", int)
-Seq = NewType("Seq", int)
+class ProductID(U16):
+	pass
+
+
+class VersionID(U16):
+	pass
+
+
+class NID(U8):
+	byteorder = "big" # network pdu
+	pass
+
+
+class AID(U8):
+	pass
+
+
+class Seq(U24):
+	byteorder = "big"  # network pdu
+	pass
+
+
 SeqAuth = NewType("SeqAuth", int)
 SeqZero = NewType("SeqZero", int)
 
+
 class RSSI(I8):
 	pass
+
 
 class NetworkID(U64):
 	byteorder = "big"
@@ -61,6 +80,7 @@ def seq_bytes(seq: Seq):
 class NetworkStateFlags(IntFlag):
 	KeyRefresh = 0
 	IVUpdate = 1
+
 
 class IVIndex(U32):
 	IV_MAX = 2 ** 32 - 1
@@ -114,33 +134,37 @@ class TTL(U8):
 class Address(U16):
 	MAX_ADDRESS = 0xFFFF
 
-	def __init__(self, addr: int):
-		if addr > self.MAX_ADDRESS:
+	def __init__(self, addr: int) -> None:
+		if 0 <= addr < self.MAX_ADDRESS:
+			super().__init__(addr)
+		else:
 			raise ValueError(f"address higher than allowed 16 bit range {addr:x}")
-		super().__init__(addr)
 
 	@classmethod
-	def from_str(cls, s: str) -> Union['GroupAddress', 'VirtualAddress', 'UnicastAddress'] :
+	def from_str(cls, s: str) -> Union['GroupAddress', 'VirtualAddress', 'UnicastAddress']:
 		if "-" in s:
 			# probably virtual address
 			return VirtualAddress(UUID(s))
-		address = cls(int(s, base=16))
+		return cls.from_int(int(s, base=16))
+
+	@classmethod
+	def from_int(cls, i: int) -> Union['GroupAddress', 'UnicastAddress']:
 		try:
-			return UnicastAddress(address.value)
+			return UnicastAddress(i)
 		except ValueError:
 			pass
 
 		try:
-			return GroupAddress(address.value)
+			return GroupAddress(i)
 		except ValueError:
 			pass
-
-		raise NotImplementedError(f"unknown address {s}")
+		raise ValueError(f"unknown address {i}")
 
 
 class GroupAddress(Address):
 	GROUP_MASK = 0xC000
-	def __init__(self, addr: int):
+
+	def __init__(self, addr: int) -> None:
 		if self.GROUP_MASK & addr != self.GROUP_MASK:
 			raise ValueError(f"{hex(addr)} is not a group address")
 		super().__init__(addr)
@@ -172,30 +196,11 @@ class VirtualAddress(Address):
 		super().__init__(self.addr().value)
 
 
-class TransmitParameters(Serializable):
-	__slots__ = "times", "delay_ms"
-
-	def __init__(self, times: int, delay_ms: int):
-		self.times = times
-		self.delay_ms = delay_ms
-
-	@classmethod
-	def default(cls) -> 'TransmitParameters':
-		return cls(5, 100)
-
-	def to_dict(self) -> Dict[str, int]:
-		return {"times": self.times, "delay_ms": self.delay_ms}
-
-	@classmethod
-	def from_dict(cls, d: Dict[str, int]) -> 'TransmitParameters':
-		return cls(d["times"], d["delay_ms"])
-
-
 class TransactionNumber(U8):
 	pass
 
 
-class RetransmitParameters(ByteSerializable):
+class TransmitParameters(ByteSerializable, Serializable):
 	__slots__ = "count", "steps"
 
 	def __init__(self, count: int, steps: int) -> None:
@@ -213,11 +218,21 @@ class RetransmitParameters(ByteSerializable):
 		return U8(self.count | (self.steps << 3)).to_bytes()
 
 	@classmethod
-	def from_bytes(cls, b: bytes) -> 'RetransmitParameters':
+	def from_bytes(cls, b: bytes) -> 'TransmitParameters':
 		v = U8.from_bytes(b).value
 		count = v & 0x3
 		steps = (v >> 3) & 0x1F
 		return cls(count=count, steps=steps)
+
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"count": self.count,
+			"steps": self.steps
+		}
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]) -> 'TransmitParameters':
+		return cls(d["count"], d["steps"])
 
 
 class Features(IntFlag):

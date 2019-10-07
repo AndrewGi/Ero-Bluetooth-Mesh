@@ -102,13 +102,16 @@ class AccessPayload:
 
 
 class AccessMessage:
-	__slots__ = "src", "dst", "opcode", "payload", "big_mic", "ttl", "appkey_index", "netkey_index", "device_key", "force_segment"
+	__slots__ = "src", "dst", "opcode", "payload", "big_mic", "ttl", "appkey_index", "netkey_index", \
+				"remote_device_key", "local_device_key", "force_segment"
 
 	def __init__(self, src: Address, dst: Address, ttl: TTL, opcode: Opcode, payload: bytes,
 				 appkey_index: Optional[AppKeyIndex],
-				 netkey_index: NetKeyIndex, big_mic: Optional[bool] = False, device_key: Optional[bool] = False,
-				 force_segment: Optional[bool] = False):
-		if device_key and appkey_index is not None:
+				 netkey_index: NetKeyIndex, big_mic: bool = False,
+				 local_device_key: bool = False, remote_device_key = False,
+				 force_segment: bool = False):
+		assert not (local_device_key and remote_device_key)
+		if (local_device_key or remote_device_key) and appkey_index is not None:
 			raise ValueError("device key True but also given an appkey_index")
 		self.src = src
 		self.dst = dst
@@ -118,8 +121,12 @@ class AccessMessage:
 		self.appkey_index = appkey_index
 		self.netkey_index = netkey_index
 		self.big_mic = big_mic
-		self.device_key = device_key
+		self.local_device_key = local_device_key
+		self.remote_device_key = remote_device_key
 		self.force_segment = force_segment
+
+	def device_key(self) -> bool:
+		return self.remote_device_key or self.remote_device_key
 
 	def access_payload(self) -> AccessPayload:
 		return AccessPayload(self.opcode, self.payload)

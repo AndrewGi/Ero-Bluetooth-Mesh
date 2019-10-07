@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESCCM
 from cryptography.hazmat.primitives.ciphers.modes import ECB
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives.asymmetric import ec
-from cryptography.exceptions import InvalidTag
+from cryptography import exceptions
 
 Salt = NewType("Salt", bytes)
 ProvisioningSalt = NewType("ProvisioningSalt", Salt)
@@ -25,6 +25,8 @@ def data_and_mic_bytes(b: bytes, m: MIC) -> bytes:
 class InvalidMIC(Exception):
 	pass
 
+class InvalidKey(Exception):
+	pass
 
 class NonceType(enum.IntEnum):
 	NETWORK = 0
@@ -119,8 +121,13 @@ class Key(ByteSerializable):
 		self.key_bytes = key_bytes
 
 	@classmethod
+	def from_bytes(cls, b: bytes) -> 'Key':
+		return cls(b)
+
+	@classmethod
 	def from_int(cls, i: int):
 		return cls(i.to_bytes(cls.KEY_LEN, byteorder="big"))
+
 
 	def hex(self) -> str:
 		return self.key_bytes.hex()
@@ -308,7 +315,9 @@ def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_da
 	aes_ccm = AESCCM(key.key_bytes, tag_len)
 	try:
 		return aes_ccm.decrypt(nonce.as_be_bytes(), data + mic.bytes_be, associated_data)
-	except InvalidTag:
+	except exceptions.InvalidKey:
+		raise InvalidKey()
+	except exceptions.InvalidTag:
 		raise InvalidMIC()
 
 
@@ -555,11 +564,11 @@ class GlobalContext(Serializable):
 		self.iv_updating = iv_updating
 		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
 		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
-		self.nets[0] = primary_net
+		self.nets[NetKeyIndex()] = primary_net
 
 	@classmethod
 	def new(cls) -> 'GlobalContext':
-		return cls(IVIndex(0), NetKeyIndexSlot.new_primary())
+		return cls(IVIndex(), NetKeyIndexSlot.new_primary())
 
 	def get_iv_index(self, ivi: Optional[bool] = None) -> Optional[IVIndex]:
 		if not ivi:
@@ -626,16 +635,31 @@ class GlobalContext(Serializable):
 		return self.nets[index]
 
 
-class LocalContext:
-	__slots__ = "seq", "device_sm"
+class LocalContext(Serializable):
+	__slots__ = "seq", "device_sm", "transmit_parameters"
 
-	def __init__(self, seq: Seq, device_sm: Optional[DeviceSecurityMaterial]):
+	def __init__(self, seq: Seq, transmit_parameters: TransmitParameters, device_sm: Optional[DeviceSecurityMaterial]):
 		self.seq = seq
+		self.transmit_parameters = transmit_parameters
 		self.device_sm = device_sm
 
 	@classmethod
 	def new_provisioner(cls) -> 'LocalContext':
-		return cls(Seq(0), None)
+		return cls(Seq(0), TransmitParameters(4, 20), None)
 
 	def seq_inc(self):
 		self.seq += 1
+
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"seq": self.seq,
+			"transmit_parameters": self.transmit_parameters.to_dict(),
+			"device_key": str(self.device_sm.key)
+		}
+
+	@classmethod
+	def from_dict(cls, d: Dict[str, Any]) -> 'LocalContext':
+		seq = Seq(d["seq"])
+		transmit_parameters = TransmitParameters.from_dict(d["transmit_parameters"])
+		device_key = DeviceKey.from_str(d["device_key"])
+		return cls(seq, transmit_parameters, DeviceSecurityMaterial(device_key))

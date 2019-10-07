@@ -1,14 +1,15 @@
 from .mesh import *
 from . import net
+import datetime
 
+class ReplayEntry(Serializable):
+	__slots__ = "src", "new_iv", "seq", "last_seen"
 
-class ReplayEntry:
-	__slots__ = "src", "new_iv", "seq"
-
-	def __init__(self, src: UnicastAddress, seq: Seq, new_iv: bool):
+	def __init__(self, src: UnicastAddress, seq: Seq, new_iv: bool, last_seen: datetime.datetime):
 		self.src = src
 		self.seq = seq
 		self.new_iv = new_iv
+		self.last_seen = last_seen
 
 	def update_seq(self, new_seq: Seq, new_iv: Optional[bool] = False):
 		if new_seq < self.seq and (self.new_iv == new_iv or new_iv):
@@ -39,7 +40,7 @@ class ReplayEntry:
 		return (hash(self.new_iv)) | (hash(self.src) << 1)
 
 
-class ReplayCache:
+class ReplayCache(Serializable):
 	__slots__ = "iv_index", "seq_set"
 
 	def __init__(self, iv_index: IVIndex):

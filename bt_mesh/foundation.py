@@ -66,6 +66,13 @@ class PublishPeriod(ByteSerializable):
 	def period(self) -> int:
 		return self.steps_res.to_milliseconds() * self.steps_num
 
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'PublishPeriod':
+		steps_res = StepResolution(b[0] >> 6)
+		steps_num = b[0] & 0x3F
+		return cls(steps_num, steps_res)
+
+
 	def to_bytes(self) -> bytes:
 		return (((self.steps_res & 0x3) << 6) | (self.steps_num & 0x3F)).to_bytes(1, byteorder="little")
 
@@ -83,6 +90,8 @@ class PublishPeriod(ByteSerializable):
 		steps_res = StepResolution(b[0] >> 6)
 		return cls(steps_num, steps_res)
 
+class ElementID(U8):
+	byteorder = "little"
 
 class SIGModelID(U16, Enum):
 	ConfigurationServer = 0x0001

@@ -1,4 +1,3 @@
-from typing import *
 from .mesh import *
 from . import crypto, prov
 
@@ -44,11 +43,21 @@ class AddressSpace(Serializable):
 
 	def __init__(self) -> None:
 		self.unicasts: Dict[UnicastAddress, RemoteDevice] = dict()
-		self.groups = dict()
+		self.groups: Dict[str, GroupAddress] = dict()
 		self.virtual = dict()
 
 	def _allocate_device(self, remote_device: RemoteDevice) -> None:
 		self.unicasts[remote_device.primary_address] = remote_device
+
+	def add_group(self, group_address: GroupAddress, name: str) -> None:
+		if name in self.groups.values():
+			raise ValueError(f"group name already exists '{name}'")
+		if group_address in self.groups.keys():
+			raise ValueError(f"group address already exists '{group_address}'")
+		self.groups[name] = group_address
+
+	def get_group(self, name: str) -> GroupAddress:
+		return self.groups[name]
 
 	def addresses(self) -> List[UnicastAddress]:
 		return sorted(self.unicasts.keys())
@@ -111,6 +120,9 @@ class AddressSpace(Serializable):
 			"unicasts": [device.to_dict() for device in self.unicasts.values()]
 		}
 
+	def get_primary_device(self, primary_address: UnicastAddress) -> RemoteDevice:
+		return self.unicasts[primary_address]
+
 
 class Network(Serializable):
 	__slots__ = "global_context", "addresses"
@@ -135,3 +147,13 @@ class Network(Serializable):
 		global_context = crypto.GlobalContext.from_dict(d["global_context"])
 		address_space = AddressSpace.from_dict(d["address_space"])
 		return cls(global_context, address_space)
+
+	def get_device_key(self, primary_address: UnicastAddress) -> Optional[crypto.DeviceSecurityMaterial]:
+		try:
+			device = self.addresses.get_primary_device(primary_address)
+		except KeyError:
+			# primary address not found
+			return None
+		else:
+			return crypto.DeviceSecurityMaterial(device.device_key)
+

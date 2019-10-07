@@ -4,6 +4,7 @@ import time
 from .mesh import *
 from . import crypto
 import enum
+import heapq
 import threading
 
 
@@ -213,6 +214,31 @@ class UnsegmentedControlLowerPDU(LowerPDU):
 		raise NotImplementedError()
 
 
+class Heartbeat(UnsegmentedControlLowerPDU):
+	__slots__ = "rfu", "init_ttl", "features"
+
+	def __init__(self, init_ttl: TTL, features: Features, rfu: bool = False) -> None:
+		super().__init__(CTLOpcode.HEARTBEAT)
+		self.rfu = rfu
+		self.init_ttl = init_ttl
+		self.features = features
+
+	def control_to_bytes(self) -> bytes:
+		return ((self.init_ttl.value & 0x3F) | (self.rfu << 7)).to_bytes(1, byteorder="little") \
+			   + self.features.to_bytes(2, byteorder="little")
+
+	@classmethod
+	def control_from_bytes(cls, b: bytes) -> 'Heartbeat':
+		assert len(b) == 3
+		rfu = (b[0] & 0x80) != 0
+		ttl = TTL(b[0] & 0x3F)
+		features = Features.from_bytes(b[1:], byteorder="little")
+		return cls(ttl, features, rfu)
+
+
+control_pdus[CTLOpcode.HEARTBEAT] = Heartbeat
+
+
 class SegmentedControlLowerPDU(LowerPDU):
 	SEG_LEN = 8
 	__slots__ = "opcode", "obo", "seq_zero", "seg_o", "seg_n", "segment"
@@ -298,7 +324,7 @@ class SegmentAcknowledgementPDU(UnsegmentedControlLowerPDU):
 
 	@classmethod
 	def control_from_bytes(cls, b: bytes) -> 'SegmentAcknowledgementPDU':
-		seq_zero_obo = int.from_bytes(b[:2], byteorder="big")
+		seq_zero_obo = int.from_bytes(b [:2], byteorder="big")
 		block_ack = BlockAck.from_bytes(b[2:2 + 4])
 		return cls(obo=(seq_zero_obo & 0x7000) == 0x7000, seq_zero=(seq_zero_obo >> 2) & 0x1FFF, block_ack=block_ack)
 
@@ -333,8 +359,13 @@ class SegmentAssembler:
 		self.obo = False
 
 	@staticmethod
-	def timer_length(ttl: int) -> int:
-		return 200 + ttl * 50
+	def ack_timer(ttl: int) -> int:
+		return 150 + ttl * 50
+
+	@staticmethod
+	def incomplete_timer() -> int:
+
+		return 10000
 
 	def verify(self, pdu: LowerPDU) -> Union[SegmentedAccessLowerPDU, SegmentedControlLowerPDU]:
 		if self.ctl and isinstance(pdu, SegmentedControlLowerPDU):
@@ -394,6 +425,10 @@ class SegmentAssembler:
 		return SegmentAcknowledgementPDU(self.obo, self.seq_zero, self.block_ack)
 
 
+class Scheduler:
+	pass
+
+
 class Reassemblers:
 	__slots__ = "contexts"
 
@@ -435,43 +470,10 @@ class SegmentedMessage:
 		self.ttl = ttl
 		self.retransmit = retransmit
 
-	def cancel(self) -> None:
-		self.retransmit = 0
-
-	def start(self) -> None:
-		self.timer_thread.start()
-
-	def trigger_send(self) -> None:
-		if self.retransmit == 0 or not self.timer_thread.is_alive():
-			raise ValueError("not currently alive")
-		self.send_event.set()
-
-	def _should_transmit(self) -> bool:
-		return self.retransmit > 0
-
-	def _timer_func(self) -> None:
-		while self._should_transmit():
-			self._unack_timeout()
-			if not self._should_transmit():
-				continue
-			self.send_event.clear()
-			self.send_event.wait(self.interval())
-
-	def _unack_timeout(self) -> None:
-		self._send_unacked()
+	def ack_timeout(self) -> None:
+		if self.retransmit <= 0:
+			raise ValueError("retransmits is 0")
 		self.retransmit -= 1
-
-	def _send_unacked(self) -> None:
-		for pdu in self.get_unacked():
-			self.send_func(pdu)
-
-	def send_func(self, pdu: LowerSegmentedPDU):
-		"""
-		Overwrite me to support automatic resending
-		:param pdu:
-		:return:
-		"""
-		pass
 
 	def interval(self) -> int:
 		return 200 * 50 * self.ttl.value
@@ -480,13 +482,13 @@ class SegmentedMessage:
 		for i in self.block_ack.get_unacked_pdu_indexes():
 			yield self.pdus[i]
 
+	def done(self) -> bool:
+		return self.block_ack == 0
+
 	def handle_ack(self, ack: SegmentAcknowledgementPDU):
+		if ack.block_ack > self.block_ack:
+			return
 		self.block_ack = ack.block_ack
-		if self.block_ack.block == 0:
-			# Empty block ack so we cancel
-			self.cancel()
-		if self.retransmit:
-			self.trigger_send()
 
 
 def make_lower_pdu(lower_pdu_bytes: bytes, ctl: bool):
