@@ -69,6 +69,7 @@ class ModelServer(Model):
 class ModelClient(Model):
 	def target(self, address: UnicastAddress, *, dev_key: bool = False, app_key_index: AppKeyIndex = None,
 			   net_key_index: NetKeyIndex = None):
+		assert self.publication, "missing publication"
 		if dev_key:
 			assert not app_key_index
 			assert not net_key_index

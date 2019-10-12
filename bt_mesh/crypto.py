@@ -2,7 +2,6 @@ import enum
 import os
 import struct
 from abc import ABC
-
 from .mesh import *
 from .serialize import Serializable
 from cryptography.hazmat.primitives import cmac
@@ -25,8 +24,10 @@ def data_and_mic_bytes(b: bytes, m: MIC) -> bytes:
 class InvalidMIC(Exception):
 	pass
 
+
 class InvalidKey(Exception):
 	pass
+
 
 class NonceType(enum.IntEnum):
 	NETWORK = 0
@@ -60,7 +61,7 @@ class NetworkNonce(Nonce):
 
 	def as_be_bytes(self) -> bytes:
 		ctl_ttl = (self.ctl << 7) | self.ttl.value
-		return self.STRUCT.pack(self.nonce_type, ctl_ttl, seq_bytes(self.seq), self.src, self.iv_index)
+		return self.STRUCT.pack(self.nonce_type, ctl_ttl, self.seq.to_bytes(), self.src, self.iv_index)
 
 
 class ApplicationNonce(Nonce):
@@ -76,7 +77,7 @@ class ApplicationNonce(Nonce):
 		self.iv_index = iv_index
 
 	def as_be_bytes(self) -> bytes:
-		return self.STRUCT.pack(self.nonce_type, self.aszmic << 7, seq_bytes(self.seq), self.src, self.dst,
+		return self.STRUCT.pack(self.nonce_type, self.aszmic << 7, self.seq.to_bytes(), self.src, self.dst,
 								self.iv_index)
 
 
@@ -93,7 +94,7 @@ class DeviceNonce(Nonce):
 		self.iv_index = iv_index
 
 	def as_be_bytes(self) -> bytes:
-		return self.STRUCT.pack(self.nonce_type, self.aszmic << 7, seq_bytes(self.seq), self.src, self.dst,
+		return self.STRUCT.pack(self.nonce_type, self.aszmic << 7, self.seq.to_bytes(), self.src, self.dst,
 								self.iv_index)
 
 
@@ -108,7 +109,7 @@ class ProxyNonce(Nonce):
 		self.iv_index = iv_index
 
 	def as_be_bytes(self) -> bytes:
-		return self.STRUCT.pack(self.nonce_type, seq_bytes(self.seq), self.src, self.iv_index)
+		return self.STRUCT.pack(self.nonce_type, self.seq.to_bytes(), self.src, self.iv_index)
 
 
 class Key(ByteSerializable):
@@ -127,7 +128,6 @@ class Key(ByteSerializable):
 	@classmethod
 	def from_int(cls, i: int):
 		return cls(i.to_bytes(cls.KEY_LEN, byteorder="big"))
-
 
 	def hex(self) -> str:
 		return self.key_bytes.hex()
@@ -564,6 +564,7 @@ class GlobalContext(Serializable):
 		self.iv_updating = iv_updating
 		self.apps: Dict[AppKeyIndex, AppKeyIndexSlot] = dict()
 		self.nets: Dict[NetKeyIndex, NetKeyIndexSlot] = dict()
+		self.net_id_to_index: Dict[NetworkID, NetKeyIndex] = dict()
 		self.nets[NetKeyIndex()] = primary_net
 
 	@classmethod
@@ -595,6 +596,9 @@ class GlobalContext(Serializable):
 		if slot.index in self.nets:
 			raise ValueError(f"net key index {slot.index} already exists")
 		self.nets[cast(NetKeyIndex, slot.index)] = slot
+		if slot.new:
+			self.net_id_to_index[cast(NetworkSecurityMaterial, slot.new).network_id] = slot.index
+		self.net_id_to_index[cast(NetworkSecurityMaterial, slot.old).network_id] = slot.index
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
@@ -610,7 +614,7 @@ class GlobalContext(Serializable):
 		context = cls(IVIndex(d["iv_index"]), primary)
 		for raw_net in d["nets"][1:]:
 			net = NetKeyIndexSlot.from_dict(raw_net)
-			context.nets[cast(NetKeyIndex, net.index)] = net
+			context.add_net(net)
 
 		for raw_app in d["apps"]:
 			app = AppKeyIndexSlot.from_dict(raw_app)
@@ -634,6 +638,24 @@ class GlobalContext(Serializable):
 	def get_net(self, index: NetKeyIndex) -> NetKeyIndexSlot:
 		return self.nets[index]
 
+	def get_beacon_key(self, network_id: NetworkID) -> Optional[Tuple[NetKeyIndex, BeaconKey]]:
+		try:
+			net_index = self.net_id_to_index[network_id]
+		except KeyError:
+			# Unknown network ID
+			return None
+		else:
+			net_slot = self.nets[net_index]
+			if net_slot.new:
+				net_sm = cast(NetworkSecurityMaterial, net_slot.new)
+				if net_sm.network_id == network_id:
+					return net_index, net_sm.beacon_key
+			net_sm = cast(NetworkSecurityMaterial, net_slot.old)
+			if net_sm.network_id == network_id:
+				return net_index, net_sm.beacon_key
+			# No matches
+			return None
+
 
 class LocalContext(Serializable):
 	__slots__ = "seq", "device_sm", "transmit_parameters"
@@ -647,8 +669,14 @@ class LocalContext(Serializable):
 	def new_provisioner(cls) -> 'LocalContext':
 		return cls(Seq(0), TransmitParameters(4, 20), None)
 
-	def seq_inc(self):
-		self.seq += 1
+	def seq_inc(self) -> Seq:
+		return self.seq_allocate(1)
+
+	def seq_allocate(self, amount: int) -> Seq:
+		assert amount > 0
+		start_seq = self.seq
+		self.seq += amount
+		return start_seq
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {

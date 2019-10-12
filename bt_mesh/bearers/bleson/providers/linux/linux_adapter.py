@@ -161,8 +161,8 @@ class BluetoothHCIAdapter(Adapter):
                           HCI_COMMAND_PKT,
                           LE_SET_ADVERTISING_PARAMETERS_CMD,
                           15,           # cmd parameters length
-                          0x00a0,       # min interval
-                          0x00a0,       # max interval
+                          0x0020,       # min interval
+                          0x0020,       # max interval
                           self.adv_type,            # adv type
                           0,            # direct addr type
                           0,            # direct addr type

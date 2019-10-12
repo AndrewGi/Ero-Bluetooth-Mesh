@@ -461,7 +461,7 @@ class Reassemblers:
 
 
 class SegmentedMessage:
-	__slots__ = "pdus", "block_ack", "seg_n", "ttl", "retransmit"
+	__slots__ = "pdus", "block_ack", "seg_n", "ttl", "retransmit", "seq_zero"
 
 	def __init__(self, pdus: List[LowerSegmentedPDU], ttl: Optional[TTL] = 10, retransmit: Optional[int] = 3):
 		self.pdus = pdus
@@ -469,6 +469,7 @@ class SegmentedMessage:
 		self.block_ack = BlockAck(0, self.seg_n)
 		self.ttl = ttl
 		self.retransmit = retransmit
+		self.seq_zero = pdus[0].seq_zero
 
 	def ack_timeout(self) -> None:
 		if self.retransmit <= 0:

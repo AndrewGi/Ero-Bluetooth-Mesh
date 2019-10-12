@@ -16,7 +16,7 @@ class ByteSerializable:
 		raise NotImplementedError()
 
 	@classmethod
-	def from_bytes(cls, b: bytes) -> Any:
+	def from_bytes(cls, b: bytes):
 		raise NotImplementedError()
 
 

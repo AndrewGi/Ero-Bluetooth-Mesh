@@ -38,12 +38,12 @@ class Session:
 		self.provisioner.on_provision_done = self.on_provision_done
 		self.provision_all = False
 		self.running = True
-		self.mesh_network: Optional[network.Network] = None
+		self.mesh_network: network.Network = network.Network.new()
 		self.network_filename: Optional[str] = None
 		self.target: Optional[mesh.Address] = None
 
 		self.mesh_stack = stack.Stack(self.bearer, crypto.LocalContext.new_provisioner(), self.mesh_network)
-		self.secure_network_beacons = beacon.SecureBeacon
+		self.secure_network_beacons = beacon.SecureBeacons()
 
 		self.handlers: Dict[str, Callable[List[str]]] = dict()
 		self.handlers["provision"] = self.cli_provision
@@ -57,6 +57,10 @@ class Session:
 		self.group_cli = GroupCLI(self)
 		self.handlers["config"] = self.configure.cli_handle
 		self.handlers["group"] = self.group_cli.cli_handle
+
+	def cli_quit(self, args: List[str]) -> None:
+		self.good("quitting...")
+		self.running = False
 
 	def load_network(self, filename: str) -> None:
 		self.info(f"loading network '{filename}")
@@ -87,7 +91,7 @@ class Session:
 	def get_provisioning_data(self, device: prov.UnprovisionedDevice) -> prov.ProvisioningData:
 		remote_device = self.mesh_network.addresses.allocate_device(device.capabilities.number_of_elements)
 		address = remote_device.primary_address
-		net_id = device.user_data["network_id"]
+		net_id = device.user_data["network_index"]
 		net_sm = self.mesh_network.global_context.get_net(net_id)
 		network_key = net_sm.old.key
 		ivi_index = self.mesh_network.global_context.iv_index
@@ -108,8 +112,8 @@ class Session:
 	def handle_beacon(self, new_beacon: beacon.Beacon) -> None:
 		if new_beacon.beacon_type == beacon.BeaconType.UnprovisionedDevice:
 			self.provisioner.handle_beacon(cast(beacon.UnprovisionedBeacon, new_beacon))
-		if new_beacon.beacon_type == beacon.BeaconType.SecureNetwork:
-			self.sec
+		elif new_beacon.beacon_type == beacon.BeaconType.SecureNetwork:
+			self.secure_network_beacons.handle_beacon(cast(beacon.SecureBeacon, new_beacon))
 
 	def print_ansi(self, ansi_code: str, line: str) -> None:
 		self.print(f"\033[{ansi_code}m{line}\033[0m")
@@ -274,7 +278,7 @@ class CLIHandler:
 		else:
 			func(args[1:])
 
-	def add_handler(self, name: str, handler: Callable[List[str]]) -> None:
+	def add_handler(self, name: str, handler: Callable[[List[str]], None]) -> None:
 		if name in self.handlers:
 			raise RuntimeError(f"{name} already being used")
 		self.handlers[name] = handler
@@ -310,7 +314,7 @@ class GroupCLI(CLIHandler):
 			self.session.error("expect 2 args for group add")
 			return
 		address = mesh.Address.from_str(args[0])
-		if not isinstance(mesh.GroupAddress, address):
+		if not isinstance(address, mesh.GroupAddress):
 			self.session.error(f"expect group address not {address.__class__}")
 		name = args[1]
 		self.add_group(address, name)
@@ -329,6 +333,7 @@ class ConfigCLI(CLIHandler):
 	def __init__(self, session: Session) -> None:
 		super().__init__("config", session)
 		self.configure_client = config_client.ConfigClient()
+		self.add_handler("relay_get", self.cli_relay_get)
 
 	def relay_get(self) -> None:
 		if not self.session.target:
@@ -340,7 +345,7 @@ class ConfigCLI(CLIHandler):
 		self.configure_client.relay.status_condition.wait()
 		self.session.good(f"relay status: {self.configure_client.relay.state}")
 
-	def cli_relay(self, args: List[str]) -> None:
+	def cli_relay_get(self, args: List[str]) -> None:
 		assert len(args) == 0
 		self.relay_get()
 
@@ -353,8 +358,6 @@ def main() -> None:
 
 	bearer = bleson_bearer.BlesonBearer()
 	session = Session(bearer)
-	session.mesh_network = network.Network.new()
-	session.mesh_stack.mesh_network = session.mesh_network
 	if len(sys.argv) > 1:
 		if sys.argv[1] == "-pall":
 			session.provision_all = True
@@ -362,6 +365,7 @@ def main() -> None:
 	while session.running:
 		line = input()
 		session.handle_line(line)
+	session.good("goodbye")
 
 
 if __name__ == "__main__":

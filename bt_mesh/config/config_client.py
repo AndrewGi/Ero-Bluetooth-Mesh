@@ -19,7 +19,7 @@ class SecureNetworkBeaconStateClient(SetStateClient):
 
 
 class RelayStateClient(SetStateClient):
-	FullState = Tuple[RelayState, RetransmitParameters]
+	FullState = Tuple[RelayState, RelayRetransmitParameters]
 
 	def __init__(self, initial_state: Optional[FullState] = None):
 		super().__init__(ConfigOpcode.RELAY_STATUS, ConfigOpcode.RELAY_GET)
@@ -35,7 +35,7 @@ class RelayStateClient(SetStateClient):
 	def relay_state(self) -> RelayState:
 		return self.state[0]
 
-	def retransmit_parameters(self) -> RetransmitParameters:
+	def retransmit_parameters(self) -> RelayRetransmitParameters:
 		return self.state[1]
 
 	def on_status(self, msg: access.AccessMessage) -> None:

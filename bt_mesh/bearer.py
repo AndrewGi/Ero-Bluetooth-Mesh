@@ -22,7 +22,7 @@ class Bearer:
 	def bearer_type(cls):
 		raise NotImplementedError()
 
-	def send_network_pdu(self, network_pdu: bytes, parameters: mesh.RetransmitParameters):
+	def send_network_pdu(self, network_pdu: bytes, parameters: mesh.TransmitParameters):
 		raise NotImplementedError()
 
 	def send_beacon(self, mesh_beacon_payload: beacon.Beacon):
@@ -46,7 +46,7 @@ class Bearers(Bearer):
 	def bearer_type(cls):
 		return BearerType.Other
 
-	def send_network_pdu(self, network_pdu: bytes, parameters: mesh.RetransmitParameters):
+	def send_network_pdu(self, network_pdu: bytes, parameters: mesh.TransmitParameters):
 		for b in self.bearers:
 			b.send_network_pdu(network_pdu, parameters)
 

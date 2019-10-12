@@ -17,6 +17,10 @@ class CompositionDataPage(abc.ABC, ByteSerializable):
 		raise NotImplementedError()
 
 
+class CRPL(U16):
+	pass
+
+
 class LogField(U8):
 
 	def __init__(self, raw: int):
@@ -66,13 +70,6 @@ class PublishPeriod(ByteSerializable):
 	def period(self) -> int:
 		return self.steps_res.to_milliseconds() * self.steps_num
 
-	@classmethod
-	def from_bytes(cls, b: bytes) -> 'PublishPeriod':
-		steps_res = StepResolution(b[0] >> 6)
-		steps_num = b[0] & 0x3F
-		return cls(steps_num, steps_res)
-
-
 	def to_bytes(self) -> bytes:
 		return (((self.steps_res & 0x3) << 6) | (self.steps_num & 0x3F)).to_bytes(1, byteorder="little")
 
@@ -83,17 +80,19 @@ class PublishPeriod(ByteSerializable):
 		}
 
 	@classmethod
-	def from_bytes(cls, b: bytes) -> 'ByteSerializable':
+	def from_bytes(cls, b: bytes) -> 'PublishPeriod':
 		if len(b) != 1:
 			raise ValueError(f"len of bytes should be 1 not {len(b)}")
 		steps_num = b[0] & 0x3F
 		steps_res = StepResolution(b[0] >> 6)
 		return cls(steps_num, steps_res)
 
+
 class ElementID(U8):
 	byteorder = "little"
 
-class SIGModelID(U16, Enum):
+
+class SIGModelID(access.ModelID):
 	ConfigurationServer = 0x0001
 	ConfigurationClient = 0x0002
 	HealthServer = 0x0003
@@ -101,7 +100,20 @@ class SIGModelID(U16, Enum):
 
 
 class VendorModelID(ByteSerializable):
-	pass
+	def __init__(self, cid: CompanyID, model_id: access.ModelID) -> None:
+		self.cid = cid
+		self.model_id = model_id
+
+	def to_bytes(self) -> bytes:
+		return self.cid.to_bytes() + self.model_id.to_bytes()
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'VendorModelID':
+		assert len(b) == 4
+		return cls(CompanyID.from_bytes(b[0:2]), access.ModelID.from_bytes(b[2:4]))
+
+	def __eq__(self, other: 'VendorModelID') -> bool:
+		return self.cid == other.cid and self.model_id == other.model_id
 
 
 class ElementDescriptor(ByteSerializable):
@@ -112,18 +124,61 @@ class ElementDescriptor(ByteSerializable):
 		self.sig_models = sig_models
 		self.vendor_models = vendor_models
 
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'ElementDescriptor':
+		location = LocationDescriptor.from_bytes(b[:2])
+		num_sig = b[2]
+		num_vendor = b[3]
+		start = 4
+		sig_models: List[SIGModelID] = list()
+		vendor_models: List[VendorModelID] = list()
+		for i in range(num_sig):
+			sig_models.append(SIGModelID.from_bytes(b[start + i * 2:start + (i + 1) * 2]))
+		start += num_sig * SIGModelID.length
+		for i in range(num_vendor):
+			vendor_models.append(VendorModelID.from_bytes(b[start + i * 4:start + (i + 1) * 4]))
+		return cls(location, sig_models, vendor_models)
 
-class Elements:
+	def to_bytes(self) -> bytes:
+		return self.location.to_bytes() + U8(len(self.sig_models)).to_bytes() + U8(len(self.vendor_models)).to_bytes() \
+			   + b"".join([sig_model.to_bytes() for sig_model in self.sig_models]) \
+			   + b"".join([vendor_model.to_bytes() for vendor_model in self.vendor_models])
+
+	def __len__(self) -> int:
+		return 2 + 1 + 1 + len(self.sig_models) * SIGModelID.length + len(self.vendor_models) * 4
+
+	def __eq__(self, other: 'ElementDescriptor') -> bool:
+		return self.location == other.location and self.sig_models.sort() == other.sig_models.sort() \
+			   and self.vendor_models.sort() == other.vendor_models.sort()
+
+
+class Elements(ByteSerializable):
 	__slots__ = "elements",
 
 	def __init__(self, elements: List[ElementDescriptor]):
 		self.elements = elements
 
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'Elements':
+		i = 0
+		elements: List[ElementDescriptor] = list()
+		while i < len(b):
+			new_element = ElementDescriptor.from_bytes(b[i:])
+			i += len(new_element)
+			elements.append(new_element)
+		return cls(elements)
+
+	def to_bytes(self) -> bytes:
+		return b"".join([element_descriptor.to_bytes() for element_descriptor in self.elements])
+
+	def __eq__(self, other: 'Elements') -> bool:
+		return self.elements.sort() == other.elements.sort()
+
 
 class CompositionDataPage0(CompositionDataPage):
 	__slots__ = "cid", "pid", "vid", "crpl", "features", "elements"
 
-	def __init__(self, cid: CompanyID, pid: ProductID, vid: VersionID, crpl: int, features: Features,
+	def __init__(self, cid: CompanyID, pid: ProductID, vid: VersionID, crpl: CRPL, features: Features,
 				 elements: Elements):
 		self.cid = cid
 		self.pid = pid
@@ -131,6 +186,24 @@ class CompositionDataPage0(CompositionDataPage):
 		self.crpl = crpl
 		self.features = features
 		self.elements = elements
+
+	def to_bytes(self) -> bytes:
+		return self.cid.to_bytes() + self.pid.to_bytes() + self.vid.to_bytes() + self.crpl.to_bytes() \
+			   + U16(self.features).to_bytes() + self.elements.to_bytes()
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'CompositionDataPage0':
+		cid = CompanyID.from_bytes(b[0:2])
+		pid = ProductID.from_bytes(b[2:4])
+		vid = VersionID.from_bytes(b[4:6])
+		crpl = CRPL.from_bytes(b[6:8])
+		features = Features(U16.from_bytes(b[8:10]).value)
+		elements = Elements.from_bytes(b[10:])
+		return cls(cid, pid, vid, crpl, features, elements)
+
+	def __eq__(self, other: 'CompositionDataPage0') -> bool:
+		return self.cid == other.cid and self.pid == other.pid and self.vid == other.vid and self.crpl == other.crpl \
+			   and self.features == other.features and self.elements == other.elements
 
 
 class Fault(U8, Enum):
@@ -200,7 +273,7 @@ class ModelPublication(ByteSerializable):
 
 	def __init__(self, element_address: UnicastAddress, publish_address: Address, app_key_index: AppKeyIndex,
 				 credential_flag: bool, publish_ttl: TTL, publish_period: PublishPeriod,
-				 publish_retransmit: RetransmitParameters,
+				 publish_retransmit: PublishRetransmitParameters,
 				 model_identifier: access.ModelIdentifier, net_key_index: Optional[NetKeyIndex] = None) -> None:
 		self.element_address = element_address
 		self.publish_address = publish_address
@@ -211,18 +284,6 @@ class ModelPublication(ByteSerializable):
 		self.publish_retransmit = publish_retransmit
 		self.model_identifier = model_identifier
 		self.net_key_index = net_key_index  # Not used in serialization but is used in model publishing
-
-	# check what net key the app key is bound to
-	def to_dict(self) -> Dict[str, Any]:
-		return {
-			"address": self.address,
-			"period": self.period,
-			"appkey_index": self.appkey_index,
-			"friendship_credentials_flag": self.friendship_credentials_flag,
-			"ttl": self.ttl,
-			"retransmit": self.retransmit
-		}
-
 
 	def to_bytes(self) -> bytes:
 		appkey_credential = U16(self.app_key_index.value | (self.credential_flag << AppKeyIndex.INDEX_LEN))
@@ -244,5 +305,5 @@ class ModelPublication(ByteSerializable):
 		credential = (appkey_credential & (1 << KeyIndex.INDEX_LEN)) != 0
 		return cls(UnicastAddress(element_address), publish_address, appkey_index, credential, TTL(publish_ttl),
 				   PublishPeriod.from_bytes(publish_period.to_bytes(1, byteorder="little")),
-				   RetransmitParameters.from_bytes(publish_retransmit.to_bytes(1, byteorder="little")),
+				   PublishRetransmitParameters.from_bytes(publish_retransmit.to_bytes(1, byteorder="little")),
 				   access.ModelIdentifier.from_bytes(model_identifier))

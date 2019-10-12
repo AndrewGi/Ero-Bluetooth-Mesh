@@ -48,7 +48,7 @@ class VersionID(U16):
 
 
 class NID(U8):
-	byteorder = "big" # network pdu
+	byteorder = "big"  # network pdu
 	pass
 
 
@@ -71,10 +71,6 @@ class RSSI(I8):
 
 class NetworkID(U64):
 	byteorder = "big"
-
-
-def seq_bytes(seq: Seq):
-	return seq.to_bytes(3, byteorder="big")
 
 
 class NetworkStateFlags(IntFlag):
@@ -123,8 +119,10 @@ class NonceType(IntEnum):
 
 class TTL(U8):
 	MAX_TTL = 127
-
+	DEFAULT_TTL = 255
 	def __init__(self, ttl: int):
+		if ttl == self.DEFAULT_TTL:
+			super().__init__(ttl)
 		if 0 <= ttl <= self.MAX_TTL:
 			super().__init__(ttl)
 		else:
@@ -202,6 +200,7 @@ class TransactionNumber(U8):
 
 class TransmitParameters(ByteSerializable, Serializable):
 	__slots__ = "count", "steps"
+	STEP_LEN: int
 
 	def __init__(self, count: int, steps: int) -> None:
 		if count > 0x07:
@@ -212,7 +211,7 @@ class TransmitParameters(ByteSerializable, Serializable):
 		self.steps = steps
 
 	def interval_ms(self) -> int:
-		return 50 * (self.count + 1)
+		return self.STEP_LEN * (self.count + 1)
 
 	def to_bytes(self) -> bytes:
 		return U8(self.count | (self.steps << 3)).to_bytes()
@@ -235,6 +234,18 @@ class TransmitParameters(ByteSerializable, Serializable):
 		return cls(d["count"], d["steps"])
 
 
+class NetworkTransmitParameters(TransmitParameters):
+	STEP_LEN = 10
+
+
+class PublishRetransmitParameters(TransmitParameters):
+	STEP_LEN = 50
+
+
+class RelayRetransmitParameters(TransmitParameters):
+	STEP_LEN = 10
+
+
 class Features(IntFlag):
 	Relay = 1
 	Proxy = 2
@@ -242,5 +253,5 @@ class Features(IntFlag):
 	LowPower = 8
 
 
-class LocationDescriptor:
+class LocationDescriptor(U16):
 	pass

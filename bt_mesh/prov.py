@@ -700,7 +700,7 @@ class UnprovisionedDevice:
 			self.close_reason = pb_generic.LinkCloseReason.Success
 			self.disconnect()
 			if self.done_callback:
-				self.done_callback()
+				self.done_callback(self)
 		elif provisioning_event == ProvisioningEvent.Fail:
 			self.log_print(f"{self.device_uuid} Failed! Error Code: {self.failed_code}")
 			if self.failed_callback:
