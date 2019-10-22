@@ -11,6 +11,7 @@ class U8le(U8):
 class U8be(U8):
 	byteorder = "big"
 
+
 class U16le(U16):
 	byteorder = "little"
 
@@ -146,8 +147,42 @@ class HostControllerBasebandOpcode(OCF):
 	ReadPageScanMode = 0x003D
 	WritePageScanMode = 0x003E
 
+class LEControllerOpcode(OCF):
+	SetEventMask = 0x0001
+	ReadBufferSize = 0x0002
+	ReadLocalSupportedFeatures = 0x0003
+	SetRandomAddress = 0x0005
+	SetAdvertisingParameters = 0x0006
+	ReadAdvertisingChannelTxPower = 0x0007
+	SetAdvertisingData = 0x0008
+	SetScanResponseData = 0x0009
+	SetAdvertisingEnable = 0x000A
+	SetScanParameters = 0x000B
+	SetScanEnable = 0x000C
+	CreateConnection = 0x000D
+	CreateConnectionCancel = 0x000E
+	ReadWhitelistSize = 0x000F
+	ClearWhitelist = 0x0010
+	AddDeviceToWhitelist = 0x0011
+	RemoveDeviceFromWhitelist = 0x0012
+	ConnectionUpdate = 0x0013
+	SetHostChannelClassification = 0x0014
+	ReadChannelMap = 0x0015
+	ReadRemoteUsedFeatures = 0x0016
+	Encrypt = 0x0017
+	Rand = 0x0018
+	StartEncryption = 0x0019
+	LongTermKeyRequestReply = 0x001A
+	LongTermKeyRequestNegativeReply = 0x001B
+	ReadSupportedState = 0x001C
+	ReceiverTest = 0x001D
+	TransmitterTest = 0x001E
+	TestEnd = 0x001F
+
 
 def ogf_of_ocf(ocf: OCF) -> OGF:
+	if isinstance(ocf, LEControllerOpcode):
+		return OGF.LEController
 	if isinstance(ocf, LinkPolicyOpcode):
 		return OGF.LinkPolicy
 	if isinstance(ocf, HostControllerBasebandOpcode):
@@ -185,25 +220,15 @@ class Opcode(ByteSerializable):
 
 
 CommandParameterClasses: Dict[OGF, Dict[OCF, 'CommandParameters']] = dict()
-def register_command_parameter_class(opcode: Opcode, t: type) -> None:
-	CommandParameterClasses[opcode.ogf][opcode.ocf] = cast(CommandParameters, t)
 
-class CommandParametersRegisterer(type):
-	def __new__(mcs, name, bases, class_dict):
-		cls = super().__new__(mcs, name, bases, class_dict)
-		register_command_parameter_class(cls, cls.)
-		return cls
 
-def __new__(meta, name, bases, class_dict):
-	cls = type.__new__(meta, name, bases, class_dict)
-	register_class(cls)
+def register_command_parameters(cls: TypeVar[CommandParameterClasses]):
+	CommandParameterClasses[cls.Opcode.ogf][cls.Opcode.ocf] = cls
 	return cls
+
+
 class CommandParameters(ByteSerializable, abc.ABC):
 	Opcode: ClassVar[Opcode]
-	classes: Dict[OGF, Dict[OCF, 'CommandParameters']] = dict()
-	def __init_subclass__(cls):
-		super().__init_subclass__()
-		cls.classes[cls.Opcode.]
 
 	def parameters_to_bytes(self) -> bytes:
 		raise NotImplementedError()
@@ -230,7 +255,6 @@ class CommandParameters(ByteSerializable, abc.ABC):
 		raise NotImplementedError()
 
 
-
 class Command(ByteSerializable):
 	__slots__ = "opcode", "parameters"
 
@@ -251,8 +275,8 @@ class Command(ByteSerializable):
 	def __repr__(self) -> str:
 		return f"Command({self.opcode}, {self.parameters})"
 
-
 class ErrorCode(enum.IntEnum):
+	Ok = 0x00
 	UnknownHCICommand = 0x01
 	NoConnection = 0x02
 	HardwareFailure = 0x03
