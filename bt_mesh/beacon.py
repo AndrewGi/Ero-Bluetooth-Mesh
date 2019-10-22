@@ -92,7 +92,7 @@ class SecureBeacons:
 		self.on_good_beacon: Optional[Callable[[SecureBeacon, 'SecureBeacons'], None]] = None
 		self.on_new_beacon: Optional[Callable[[SecureBeacon, 'SecureBeacons'], None]] = None
 
-	def get_beacon_key(self, network_id: NetworkID) -> Optional[crypto.NetKeyIndex, crypto.BeaconKey]:
+	def get_beacon_key(self, network_id: NetworkID) -> Optional[Tuple[crypto.NetKeyIndex, crypto.BeaconKey]]:
 		pass
 
 	def handle_beacon(self, incoming_beacon: SecureBeacon) -> None:

@@ -24,7 +24,7 @@ class EmptyModelMessage(ModelMessage):
 		return cls()
 
 
-HandlerCallable = Callable[[Optional[ModelMessage]], access.AccessMessage]
+HandlerCallable = Callable[[Optional[ModelMessage], ], access.AccessMessage]
 
 
 class MessageHandler:
@@ -36,7 +36,7 @@ class MessageHandler:
 
 
 class Model:
-	__slots__ = "company_id", "model_id", "handlers", "states", "publication"
+	__slots__ = "company_id", "model_id", "handlers", "states", "publication", "send_access"
 
 	def __init__(self, model_id: ModelID, company_id: Optional[CompanyID] = SIGCompanyID) -> None:
 		self.model_id = model_id
@@ -44,6 +44,7 @@ class Model:
 		self.handlers: Dict[access.Opcode, HandlerCallable] = dict()
 		self.states: List['State'] = list()
 		self.publication: Optional[foundation.ModelPublication] = None
+		self.send_access: Optional[Callable[[access.AccessMessage], None]] = None
 
 	def add_handler(self, opcode: access.Opcode, callback: HandlerCallable) -> None:
 		if opcode in self.handlers.values():
@@ -54,9 +55,6 @@ class Model:
 		for opcode, handler in state.handlers.items():
 			self.add_handler(opcode, handler)
 		self.states.append(state)
-
-	def access_send(self, msg: access.AccessMessage) -> None:
-		pass
 
 	def publish(self, opcode: access.Opcode, msg: ModelMessage) -> None:
 		access.AccessMessage(self.publication.element_address, self.publication.publish_address,
@@ -71,6 +69,7 @@ class ModelServer(Model):
 class ModelClient(Model):
 	def target(self, address: UnicastAddress, *, dev_key: bool = False, app_key_index: AppKeyIndex = None,
 			   net_key_index: NetKeyIndex = None):
+		assert self.publication, "missing publication"
 		if dev_key:
 			assert not app_key_index
 			assert not net_key_index

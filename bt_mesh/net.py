@@ -7,10 +7,10 @@ def xor_bytes(b1: bytes, b2: bytes) -> bytes:
 	return bytes(a ^ b for a, b in zip(b1, b2))
 
 
-class PDU:
+class PDU(Serializable):
 	__slots__ = ("ivi", "nid", "ctl", "ttl", "seq", "src", "dst", "transport_pdu")
 
-	def __init__(self, ivi: bool, nid: NID, ctl: bool, ttl: TTL, seq: int, src: UnicastAddress, dst: Address,
+	def __init__(self, ivi: bool, nid: NID, ctl: bool, ttl: TTL, seq: Seq, src: UnicastAddress, dst: Address,
 				 transport_pdu: bytes):
 		self.ivi = ivi
 		self.nid = nid
@@ -58,7 +58,7 @@ class PDU:
 		privacy_random = encrypted_dst_trans_pdu + net_mic.bytes_be
 		pecb = self.pecb(privacy_key, iv_index, privacy_random)
 		return privacy_random, xor_bytes(
-			struct.pack("!B3sH", (self.ctl << 7 | self.ttl.value), seq_bytes(self.seq), self.src), pecb[0:5])
+			struct.pack("!B3sH", (self.ctl << 7 | self.ttl.value), self.seq.value, self.src), pecb[0:5])
 
 	@classmethod
 	def deobfuscate(cls, b: bytes, privacy_key: crypto.PrivacyKey, iv_index: IVIndex) -> Tuple[
@@ -73,7 +73,7 @@ class PDU:
 		privacy_random = b[8:8 + 7]
 		pecb = cls.pecb(privacy_key, iv_index, privacy_random)
 		ctl_ttl, seq, src = struct.unpack("!B3sH", xor_bytes(pecb, b[0:8]))
-		return (ctl_ttl >> 7) == 1, TTL(ctl_ttl % 0x7F), Seq(int.from_bytes(seq, byteorder="big")), UnicastAddress(src)
+		return (ctl_ttl >> 7) == 1, TTL(ctl_ttl % 0x7F), Seq.from_bytes(seq), UnicastAddress(src)
 
 	@staticmethod
 	def ivi_nid(b: bytes) -> Tuple[bool, NID]:
@@ -104,4 +104,28 @@ class PDU:
 		dst_transport_pdu = cls.decrypt(sec_mat.encryption_key, network_nonce, encrypted_transport, net_mic)
 		dst = Address(dst_transport_pdu[:2])
 		transport_pdu = dst_transport_pdu[2:]
+		return cls(ivi, nid, ctl, ttl, seq, src, dst, transport_pdu)
+
+	def to_dict(self) -> DictValue:
+		return {
+			"src": self.src.value,
+			"dst": self.dst.value,
+			"ivi": self.ivi,
+			"nid": self.nid,
+			"seq": self.seq,
+			"ttl": self.ttl.value,
+			"ctl": self.ctl,
+			"transport_pdu": base64_encode(self.transport_pdu)
+		}
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> 'PDU':
+		src = UnicastAddress(d['src'])
+		dst = Address.from_int(d['dst'])
+		ivi = d['ivi']
+		nid = NID(d['nid'])
+		seq = Seq(d['seq'])
+		ttl = TTL(d['ttl'])
+		ctl = d['ctl']
+		transport_pdu = base64_decode(d['transport_pdu'])
 		return cls(ivi, nid, ctl, ttl, seq, src, dst, transport_pdu)

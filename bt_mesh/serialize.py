@@ -1,5 +1,14 @@
 from typing import *
 from functools import total_ordering
+import base64
+
+
+def base64_encode(b: bytes) -> str:
+	return base64.encodebytes(b)
+
+
+def base64_decode(s: str) -> bytes:
+	return base64.decodebytes(s)
 
 
 class ByteSerializable:
@@ -7,23 +16,26 @@ class ByteSerializable:
 		raise NotImplementedError()
 
 	@classmethod
-	def from_bytes(cls, b: bytes) -> Any:
+	def from_bytes(cls, b: bytes):
 		raise NotImplementedError()
+
+
+DictValue = NewType('DictValue', Union[str, int, float, bool, None, Dict[str, 'DictValue'], List['DictValue']])
 
 
 class Serializable:
-	def to_dict(self) -> Dict[str, Any]:
+	def to_dict(self) -> DictValue:
 		raise NotImplementedError()
 
 	@classmethod
-	def from_dict(cls, d: Dict[str, Any]):
+	def from_dict(cls, d: DictValue) -> Any:
 		raise NotImplementedError()
 
 
 IntOperand = Union['Integer', int]
 
 
-def serialize_dict(d: Dict[str, Serializable]) -> Dict[str, Any]:
+def serialize_dict(d: Dict[str, Serializable]) -> DictValue:
 	return {
 		key: value.to_dict() for key, value in d
 	}
@@ -103,10 +115,10 @@ class Integer(ByteSerializable):
 	def __lt__(self, other: IntOperand) -> bool:
 		return self.value < self._value(other)
 
-	def __repr__(self) -> 'str':
+	def __repr__(self) -> str:
 		return f"{self.__class__.__name__}({self.value})"
 
-	def __hash__(self) -> bytes:
+	def __hash__(self) -> int:
 		return hash(self.value)
 
 

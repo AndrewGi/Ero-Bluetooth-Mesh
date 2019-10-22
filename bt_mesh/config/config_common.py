@@ -255,7 +255,7 @@ class Relay:
 	class Set(ModelMessage):
 		__slots__ = "relay_state", "retransmit_parameters"
 
-		def __init__(self, relay_state: RelayState, retransmit_parameters: RetransmitParameters) -> None:
+		def __init__(self, relay_state: RelayState, retransmit_parameters: RelayRetransmitParameters) -> None:
 			self.relay_state = relay_state
 			self.retransmit_parameters = retransmit_parameters
 
@@ -264,12 +264,12 @@ class Relay:
 
 		@classmethod
 		def from_bytes(cls, b: bytes) -> 'Relay.Set':
-			return cls(RelayState.from_bytes(b[:1]), RetransmitParameters.from_bytes(b[1:]))
+			return cls(RelayState.from_bytes(b[:1]), RelayRetransmitParameters.from_bytes(b[1:]))
 
 	class Status(StatusMessage):
 		__slots__ = "relay_state", "retransmit_parameters"
 
-		def __init__(self, relay_state: RelayState, retransmit_parameters: RetransmitParameters) -> None:
+		def __init__(self, relay_state: RelayState, retransmit_parameters: RelayRetransmitParameters) -> None:
 			self.relay_state = relay_state
 			self.retransmit_parameters = retransmit_parameters
 
@@ -278,7 +278,7 @@ class Relay:
 
 		@classmethod
 		def from_bytes(cls, b: bytes) -> 'Relay.Status':
-			return cls(RelayState.from_bytes(b[:1]), RetransmitParameters.from_bytes(b[1:]))
+			return cls(RelayState.from_bytes(b[:1]), RelayRetransmitParameters.from_bytes(b[1:]))
 
 
 class NetKeyList:
@@ -416,7 +416,7 @@ class AppKeyList:
 			self.net_key_index = net_key_index
 
 		def to_bytes(self) -> bytes:
-			self.net_key_index.to_bytes()
+			return self.net_key_index.to_bytes()
 
 		@classmethod
 		def from_bytes(cls, b: bytes) -> 'AppKeyList.Get':

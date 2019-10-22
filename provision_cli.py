@@ -3,18 +3,27 @@ from uuid import UUID
 import sys
 
 if __name__ == "__main__":
-	from bt_mesh import mesh, prov, beacon, network, stack
+	from bt_mesh import mesh, prov, beacon, network, stack, crypto
 	from bt_mesh.config import config_client
 	from bt_mesh.bearers import bleson_bearer
 	from bt_mesh.bearers.pb_adv import AdvBearer, Link, Links
 else:
-	from .bt_mesh import mesh, prov, beacon, network, stack
+	from .bt_mesh import mesh, prov, beacon, network, stack, crypto
 	from .bt_mesh.bearers.pb_adv import AdvBearer, Link, Links
 	from .bt_mesh.config import config_client
 	from .bt_mesh.bearers import bleson_bearer
 
 from typing import *
 
+
+class Target:
+	def __init__(self, address: mesh.Address, net_key_index: mesh.NetKeyIndex, app_key_index: mesh.AppKeyIndex) -> None:
+		self.address = address
+		self.net_key_index = net_key_index
+		self.app_key_index = app_key_index
+
+	def __repr__(self) -> str:
+		return f"Target({self.address}, {self.net_key_index}, {self.app_key_index})"
 
 class Session:
 
@@ -29,11 +38,12 @@ class Session:
 		self.provisioner.on_provision_done = self.on_provision_done
 		self.provision_all = False
 		self.running = True
-		self.mesh_network: Optional[network.Network] = None
+		self.mesh_network: network.Network = network.Network.new()
 		self.network_filename: Optional[str] = None
 		self.target: Optional[mesh.Address] = None
 
-		self.mesh_stack = stack.Stack(self.bearer, None)
+		self.mesh_stack = stack.Stack(self.bearer, crypto.LocalContext.new_provisioner(), self.mesh_network)
+		self.secure_network_beacons = beacon.SecureBeacons()
 
 		self.handlers: Dict[str, Callable[List[str]]] = dict()
 		self.handlers["provision"] = self.cli_provision
@@ -44,7 +54,13 @@ class Session:
 		self.handlers["target"] = self.cli_target
 
 		self.configure = ConfigCLI(self)
+		self.group_cli = GroupCLI(self)
 		self.handlers["config"] = self.configure.cli_handle
+		self.handlers["group"] = self.group_cli.cli_handle
+
+	def cli_quit(self, args: List[str]) -> None:
+		self.good("quitting...")
+		self.running = False
 
 	def load_network(self, filename: str) -> None:
 		self.info(f"loading network '{filename}")
@@ -57,7 +73,7 @@ class Session:
 			self.error(f"'{filename}' not found!")
 		self.network_filename = filename
 		self.mesh_stack.mesh_network = self.mesh_network
-		self.good("loaded network")
+		self.good(f"loaded '{filename}' network")
 
 	def save_network(self, filename: str) -> None:
 		self.info(f"saving network to '{filename}'")
@@ -67,7 +83,7 @@ class Session:
 		with open(filename, "w") as json_file:
 			json.dump(self.mesh_network.to_dict(), json_file)
 		self.network_filename = filename
-		self.good("saved network")
+		self.good(f"saved network to '{filename}'")
 
 	def on_new_device(self, new_device: prov.UnprovisionedDevice) -> None:
 		self.info(f"new device! {new_device.device_uuid}")
@@ -75,7 +91,7 @@ class Session:
 	def get_provisioning_data(self, device: prov.UnprovisionedDevice) -> prov.ProvisioningData:
 		remote_device = self.mesh_network.addresses.allocate_device(device.capabilities.number_of_elements)
 		address = remote_device.primary_address
-		net_id = device.user_data["network_id"]
+		net_id = device.user_data["network_index"]
 		net_sm = self.mesh_network.global_context.get_net(net_id)
 		network_key = net_sm.old.key
 		ivi_index = self.mesh_network.global_context.iv_index
@@ -96,6 +112,8 @@ class Session:
 	def handle_beacon(self, new_beacon: beacon.Beacon) -> None:
 		if new_beacon.beacon_type == beacon.BeaconType.UnprovisionedDevice:
 			self.provisioner.handle_beacon(cast(beacon.UnprovisionedBeacon, new_beacon))
+		elif new_beacon.beacon_type == beacon.BeaconType.SecureNetwork:
+			self.secure_network_beacons.handle_beacon(cast(beacon.SecureBeacon, new_beacon))
 
 	def print_ansi(self, ansi_code: str, line: str) -> None:
 		self.print(f"\033[{ansi_code}m{line}\033[0m")
@@ -115,11 +133,11 @@ class Session:
 	def print(self, line: str) -> None:
 		print(line)
 
-	def provision(self, uuid: UUID, network_id: prov.crypto.NetKeyIndex) -> None:
-		self.info(f"provisioning {uuid} to network {network_id.value}...")
+	def provision(self, uuid: UUID, network_index: prov.crypto.NetKeyIndex) -> None:
+		self.info(f"provisioning {uuid} to network {network_index.value}...")
 		device = self.provisioner.unprovisioned_devices.get(uuid)
 		device.set_bearer(self.links.new_link(uuid))
-		device.user_data["network_id"] = network_id
+		device.user_data["network_index"] = network_index
 		self.provisioner.provision(uuid)
 
 	def cli_provision(self, args: List[str]) -> None:
@@ -127,10 +145,10 @@ class Session:
 		uuid_bytes = int(args[0], base=16).to_bytes(byteorder="big", length=len(args[0]) // 2)
 		if len(uuid_bytes) > 16:
 			raise ValueError(f"expect 16 bytes got {len(uuid_bytes)}")
-		network_id = prov.crypto.NetKeyIndex(int(args[1])) if len(args) >= 2 else prov.crypto.NetKeyIndex(0)
+		network_index = prov.crypto.NetKeyIndex(int(args[1])) if len(args) >= 2 else prov.crypto.NetKeyIndex(0)
 		uuid_bytes += b"\x00" * (16 - len(uuid_bytes))
 		uuid = UUID(bytes=uuid_bytes)
-		self.provision(uuid, network_id)
+		self.provision(uuid, network_index)
 
 	def cli_load_network(self, args: List[str]) -> None:
 		if len(args) > 1:
@@ -156,38 +174,41 @@ class Session:
 		self.info(f"filename: {self.network_filename}")
 		self.info(f"json: {self.mesh_network.to_dict()}")
 
+
 	def handle_line(self, line: str) -> None:
 		self.handle_args(line.split())
 
 	def handle_args(self, args: List[str]) -> None:
 		if not args:
 			return
-		func = None
 		try:
 			func = self.handlers[args[0]]
 		except KeyError:
 			self.error(f"unrecognized command '{args}'")
 			return
-		if func is None:
-			return
-		func(args[1:])
+		else:
+			func(args[1:])
 
 	def cli_target(self, args: List[str]) -> None:
 		def print_target():
 			self.good(f"target: {self.target}")
+
 		if len(args) == 0:
 			print_target()
 			return
-		if len(args) == 1:
-			new_target = args[0]
-			if new_target.lower() == "none":
-				self.target = None
-				print_target()
-				return
-			self.target = mesh.Address.from_str(new_target)
+		if len(args) == 1 and args[0].lower() == "none":
+			self.target = None
+			print_target()
+			return
+
+		if len(args) != 3:
+			self.error("expected 3 args for target")
+			return
+		new_address = mesh.Address.from_str(args[0])
+		net_key_index = mesh.NetKeyIndex(int(args[1], base=16) if args[1].startswith("0x") else int(args[1]))
+		app_key_index = mesh.AppKeyIndex(int(args[2], base=16) if args[1].startswith("0x") else int(args[2]))
+		self.target = Target(new_address, net_key_index, app_key_index)
 		print_target()
-
-
 
 	def cli_user_data(self, args: List[str]) -> None:
 		if not self.target:
@@ -205,6 +226,7 @@ class Session:
 
 		if len(args) > 1:
 			new_value = " ".join(args[1:])
+
 			def set_net_value() -> None:
 				if new_value.lower() == "none":
 					del device.user_data[key]
@@ -238,7 +260,6 @@ class Session:
 		self.good(f"{self.target}:{key}:{value}")
 
 
-
 class CLIHandler:
 	def __init__(self, name: str, session: Session) -> None:
 		self.name = name
@@ -246,28 +267,73 @@ class CLIHandler:
 		self.handlers: Dict[str, Callable[List[str]]] = dict()
 		self.session.handlers[self.name] = self.cli_handle
 
-
 	def cli_handle(self, args: List[str]) -> None:
 		if not args:
 			return
-		func = None
 		try:
 			func = self.handlers[args[0]]
 		except KeyError:
 			self.session.error(f"{self.name}: unrecognized command '{args}'")
-			self.session.error(f"{self.name}: unrecognized command '{args}'")
 			return
-		if func is None:
+		else:
+			func(args[1:])
+
+	def add_handler(self, name: str, handler: Callable[[List[str]], None]) -> None:
+		if name in self.handlers:
+			raise RuntimeError(f"{name} already being used")
+		self.handlers[name] = handler
+
+class GroupCLI(CLIHandler):
+	def __init__(self, session: Session) -> None:
+		super().__init__("group", session)
+		self.add_handler("add", self.cli_group_add)
+		self.add_handler("list", self.cli_list_group)
+		self.add_handler("get", self.cli_group_get)
+
+	def get_group(self, name: str) -> None:
+		try:
+			address = self.session.mesh_network.addresses.get_group(name)
+		except KeyError:
+			self.session.warning(f"'{name}' group not found")
 			return
-		func(args[1:])
+		else:
+			self.session.good(f"{name} : {address}")
+
+	def cli_group_get(self, args: List[str]) -> None:
+		if len(args) != 1:
+			self.session.error("expected 1 arg for group get")
+			return
+		self.get_group(args[0])
+
+	def add_group(self, address: mesh.GroupAddress, name: str) -> None:
+		self.session.mesh_network.addresses.add_group(address, name)
+		self.session.good(f"added group '{name}' : '{address}'")
+
+	def cli_group_add(self, args: List[str]) -> None:
+		if len(args) != 2:
+			self.session.error("expect 2 args for group add")
+			return
+		address = mesh.Address.from_str(args[0])
+		if not isinstance(address, mesh.GroupAddress):
+			self.session.error(f"expect group address not {address.__class__}")
+		name = args[1]
+		self.add_group(address, name)
+
+	def list_groups(self) -> None:
+		self.session.good(str(self.session.mesh_network.addresses.groups))
+
+	def cli_list_group(self, args: List[str]) -> None:
+		if len(args) != 0:
+			self.session.error(f"expected 0 args for group list")
+			return
+		self.list_groups()
+
 
 class ConfigCLI(CLIHandler):
 	def __init__(self, session: Session) -> None:
 		super().__init__("config", session)
 		self.configure_client = config_client.ConfigClient()
-
-	def cli_handle(self, args: List[str]) -> None:
-		pass
+		self.add_handler("relay_get", self.cli_relay_get)
 
 	def relay_get(self) -> None:
 		if not self.session.target:
@@ -279,10 +345,9 @@ class ConfigCLI(CLIHandler):
 		self.configure_client.relay.status_condition.wait()
 		self.session.good(f"relay status: {self.configure_client.relay.state}")
 
-	def cli_relay(self, args: List[str]) -> None:
+	def cli_relay_get(self, args: List[str]) -> None:
 		assert len(args) == 0
 		self.relay_get()
-
 
 
 def main() -> None:
@@ -293,8 +358,6 @@ def main() -> None:
 
 	bearer = bleson_bearer.BlesonBearer()
 	session = Session(bearer)
-	session.mesh_network = network.Network.new()
-	session.mesh_stack.mesh_network = session.mesh_network
 	if len(sys.argv) > 1:
 		if sys.argv[1] == "-pall":
 			session.provision_all = True
@@ -302,6 +365,7 @@ def main() -> None:
 	while session.running:
 		line = input()
 		session.handle_line(line)
+	session.good("goodbye")
 
 
 if __name__ == "__main__":
