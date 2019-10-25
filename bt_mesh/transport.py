@@ -2,7 +2,7 @@ import struct
 import time
 
 from .mesh import *
-from . import crypto
+from . import crypto, scheduler
 import enum
 import heapq
 import threading
@@ -293,6 +293,9 @@ class BlockAck:
 	def to_bytes(self) -> bytes:
 		return self.block.to_bytes(self.LEN, byteorder="big")
 
+	def is_done(self) -> bool:
+		return self.block == (2**(self.seg_n)-1)
+
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'BlockAck':
 		if len(b) != cls.LEN:
@@ -313,10 +316,10 @@ class BlockAck:
 class SegmentAcknowledgementPDU(UnsegmentedControlLowerPDU):
 	__slots__ = "obo", "seq_zero", "block_ack"
 
-	def __init__(self, obo: bool, seq_zero: int, block_ack: BlockAck):
+	def __init__(self, obo: bool, seq_zero: SeqZero, block_ack: BlockAck):
 		super().__init__(CTLOpcode.ACK)
 		self.obo = obo
-		self.seq = seq_zero
+		self.seq_zero = seq_zero
 		self.block_ack = block_ack
 
 	def control_to_bytes(self) -> bytes:
@@ -351,7 +354,7 @@ class SegmentAssembler:
 		self.seq_zero = pdu.seq_zero
 		self.seg_n = first_pdu.seg_n
 		self.seg_mask = (2 ** self.seg_n) - 1
-		self.block_ack = BlockAck(self.seg_mask, self.seg_n)
+		self.block_ack = BlockAck(0, self.seg_n)
 		self.seg_len = pdu.SEG_LEN
 		self.known_len = 0
 		self.max_len = self.seg_n * self.seg_len
@@ -364,7 +367,6 @@ class SegmentAssembler:
 
 	@staticmethod
 	def incomplete_timer() -> int:
-
 		return 10000
 
 	def verify(self, pdu: LowerPDU) -> Union[SegmentedAccessLowerPDU, SegmentedControlLowerPDU]:
@@ -375,8 +377,11 @@ class SegmentAssembler:
 		else:
 			raise ValueError(f"unexpected lower pdu type ctl:{self.ctl} pdu:{pdu}")
 
-	def insert_segment(self, seg_i: int, data: bytes):
-		position = self.seg_n * self.seg_len
+	def insert_segment(self, seg_i: int, data: bytes) -> bool:
+		if self.block_ack.get(seg_i):
+			# already seen the packet.
+			return False
+		position = seg_i * self.seg_len
 		if position + len(data) > self.max_len:
 			raise ValueError("data out of bounds")
 		if seg_i != self.seg_n:
@@ -389,20 +394,20 @@ class SegmentAssembler:
 			self.data[i + position] = data[i]
 		self.block_ack = self.block_ack.set(seg_i)
 
-	def insert_ctl(self, pdu: SegmentedControlLowerPDU):
+	def insert_ctl(self, pdu: SegmentedControlLowerPDU) -> bool:
 		assert self.ctl, "trying to insert a control pdu into an access segment assembly"
-		self.insert_segment(pdu.seg_o, pdu.segment)
+		return self.insert_segment(pdu.seg_o, pdu.segment)
 
-	def insert_access(self, pdu: SegmentedAccessLowerPDU):
+	def insert_access(self, pdu: SegmentedAccessLowerPDU) -> bool:
 		assert not self.ctl, "trying to insert a access pdu into a ctl segment assembly"
-		self.insert_segment(pdu.seg_o, pdu.segment)
+		return self.insert_segment(pdu.seg_o, pdu.segment)
 
 	def upper_bytes(self) -> bytes:
 		assert self.is_done() and self.known_len, "segment assemble must be done before getting upper transport pdu"
 		return self.data[:self.known_len]
 
 	def is_done(self) -> bool:
-		return self.block_ack == 0
+		return self.block_ack.block == self.seg_mask
 
 	def get_upper_control(self) -> 'UnsegmentedControlLowerPDU':
 		assert self.ctl
@@ -414,62 +419,125 @@ class SegmentAssembler:
 		else:
 			return UpperEncryptedAccessPDU.from_bytes(self.upper_bytes(), self.szmic)
 
-	def insert(self, pdu: LowerPDU):
+	def insert(self, pdu: LowerPDU) -> bool:
 		pdu = self.verify(pdu)
 		if self.ctl:
-			self.insert_ctl(pdu)
+			return self.insert_ctl(pdu)
 		else:
-			self.insert_access(pdu)
+			return self.insert_access(pdu)
 
 	def ack(self) -> SegmentAcknowledgementPDU:
 		return SegmentAcknowledgementPDU(self.obo, self.seq_zero, self.block_ack)
 
+	def cancel_ack(self) -> SegmentAcknowledgementPDU:
+		return SegmentAcknowledgementPDU(self.obo, self.seq_zero, BlockAck(0, self.seg_n))
 
-class Scheduler:
-	pass
 
+
+class ReassemblerContext:
+	def __init__(self, parent: 'Reassemblers', segment_assembler: SegmentAssembler, ttl: TTL) -> None:
+		self.parent = parent
+		self.segment_assembler = segment_assembler
+		self.task: Optional[scheduler.Task] = None
+		self.start_time = time.time()
+		self.ttl = ttl
+		self.send_seg_ack: Optional[Callable[[SegmentAcknowledgementPDU, TTL], None]] = None
+
+	def is_incomplete(self) -> bool:
+		return time.time() - self.start_time > self.segment_assembler.incomplete_timer()
+
+	def reset_timer(self) -> None:
+		assert self.task
+		self.task.reschedule(time.time()+self.segment_assembler.ack_timer(self.ttl.value))
+
+	def incomplete(self) -> None:
+		self.task.cancel()
+		del self.parent.contexts[self.seg_src()]
+		self.send_seg_ack(self.segment_assembler.cancel_ack())
+
+	def seg_src(self) -> SegmentSrc:
+		return SegmentSrc(self.segment_assembler.src, self.segment_assembler.seq_zero)
+
+	def trigger_send_ack(self) -> None:
+		assert self.send_seg_ack
+		if self.is_incomplete():
+			self.incomplete()
+			return
+		if self.segment_assembler.is_done():
+			self.task.cancel()
+			del self.parent.contexts[self.seg_src()]
+		else:
+			self.reset_timer()
+		self.send_seg_ack(self.segment_assembler.ack(), self.ttl)
+
+
+class ReassemblerTask(scheduler.Task):
+	def __init__(self, parent: 'ReassemblerContext'):
+		super().__init__(time.time() + self.parent.segment_assembler.ack_timer(parent.ttl.value))
+		self.parent = parent
+
+	def fire(self) -> None:
+		self.parent.trigger_send_ack()
 
 class Reassemblers:
-	__slots__ = "contexts"
+	__slots__ = "contexts", "scheduler", "ttl"
 
-	def __init__(self):
-		self.contexts: Dict[SegmentSrc, SegmentAssembler] = dict()
+	def __init__(self, ttl: TTL):
+		self.contexts: Dict[SegmentSrc, ReassemblerContext] = dict()
+		self.scheduler = scheduler.Scheduler()
+		self.ttl = ttl
 
 	def handle_control(self, control_pdu: UnsegmentedControlLowerPDU):
 		pass
+
+	def add_new_assembler(self, src: UnicastAddress, pdu: LowerSegmentedPDU) -> None:
+		new_context = ReassemblerContext(self, SegmentAssembler(src, pdu), self.ttl)
+		self.contexts[SegmentSrc(src, pdu.seq_zero)] = new_context
+		self.scheduler.add_task(ReassemblerTask(new_context))
+		new_context.trigger_send_ack()
 
 	def handle(self, src: UnicastAddress, pdu: LowerSegmentedPDU) -> Optional[UpperEncryptedAccessPDU]:
 		seg_src = SegmentSrc(src, pdu.seq_zero)
 		if seg_src not in self.contexts:
 			if pdu.seg_o == 0:
-				self.contexts[seg_src] = SegmentAssembler(src, pdu)
+				self.add_new_assembler(src, pdu)
 				return
 			else:
 				# TODO: Allow reassembly out of order
 				raise ValueError("unknown segment pdu")
 		else:
-			assembler: SegmentAssembler = self.contexts[seg_src]
-			assembler.insert(pdu)
-			if assembler.is_done():
-				del self.contexts[seg_src]
-				if assembler.ctl:
-					self.handle_control(assembler.get_upper_control())
+			context: ReassemblerContext = self.contexts[seg_src]
+			if not context.segment_assembler.insert(pdu):
+				# old packet.
+				return None
+			if context.segment_assembler.is_done():
+				context.trigger_send_ack()
+				if context.segment_assembler.ctl:
+					self.handle_control(context.segment_assembler.get_upper_control())
 				else:
-					upper = assembler.get_upper()
+					upper = context.segment_assembler.get_upper()
 					return upper
+			else:
+				if pdu.seg_n == pdu.seg_o:
+					# if its the last segment of the block, send a ack.
+					context.trigger_send_ack()
 			return None
 
 
 class SegmentedMessage:
-	__slots__ = "pdus", "block_ack", "seg_n", "ttl", "retransmit", "seq_zero"
+	__slots__ = "pdus", "block_ack", "seg_n", "ttl", "retransmit", "seq_zero", "dst", "src", "net_sm"
 
-	def __init__(self, pdus: List[LowerSegmentedPDU], ttl: Optional[TTL] = 10, retransmit: Optional[int] = 3):
+	def __init__(self, pdus: List[LowerSegmentedPDU], src: UnicastAddress, dst: Address, net_sm: crypto.NetworkSecurityMaterial,
+				 ttl: Optional[TTL] = 10, retransmit: Optional[int] = 4):
 		self.pdus = pdus
 		self.seg_n = pdus[0].seg_n
 		self.block_ack = BlockAck(0, self.seg_n)
 		self.ttl = ttl
 		self.retransmit = retransmit
 		self.seq_zero = pdus[0].seq_zero
+		self.src = src
+		self.dst = dst
+		self.net_sm = net_sm
 
 	def ack_timeout(self) -> None:
 		if self.retransmit <= 0:
@@ -477,20 +545,61 @@ class SegmentedMessage:
 		self.retransmit -= 1
 
 	def interval(self) -> int:
-		return 200 * 50 * self.ttl.value
+		return 200 + 50 * self.ttl.value
 
 	def get_unacked(self) -> Generator[LowerSegmentedPDU, None, None]:
 		for i in self.block_ack.get_unacked_pdu_indexes():
 			yield self.pdus[i]
 
-	def done(self) -> bool:
-		return self.block_ack == 0
+	def is_done(self) -> bool:
+		return self.block_ack.is_done()
 
 	def handle_ack(self, ack: SegmentAcknowledgementPDU):
+		assert self.seq_zero == ack.seq_zero
 		if ack.block_ack > self.block_ack:
 			return
 		self.block_ack = ack.block_ack
 
+class SegmentedTask(scheduler.Task):
+	def __init__(self, parent: 'SegmentedContext') -> None:
+		super().__init__(time.time() + parent.segmented_message.interval())
+		self.parent = parent
+
+	def fire(self) -> None:
+		self.parent
+
+class SegmentedContext:
+
+	def __init__(self, segmented_message: SegmentedMessage) -> None:
+		self.segmented_message = segmented_message
+		self.task: Optional[scheduler.Task] = None
+
+	def send_lower_pdu(self):
+
+
+class SegmentedMessages:
+
+	def __init__(self) -> None:
+		self.retransmit_scheduler = scheduler.Scheduler()
+		self.messages: Dict[SeqZero, SegmentedMessage] = dict()
+		self.seq_allocate: Optional[Callable[[int,], Seq]] = None
+
+
+
+	def add(self, segmented_msg: SegmentedMessage) -> None:
+		assert not segmented_msg.is_done()
+		self.messages[segmented_msg.seq_zero] = segmented_msg
+
+
+	def handle_ack(self, ack: SegmentAcknowledgementPDU) -> None:
+		try:
+			mh: SegmentedMessage = self.messages[ack.seq_zero]
+			mh.handle_ack(ack)
+			if mh.is_done():
+				del self.messages[ack.seq_zero]
+		except KeyError:
+			# unknown seq_zero so ignore.
+			return
 
 def make_lower_pdu(lower_pdu_bytes: bytes, ctl: bool):
 	if (lower_pdu_bytes[0] & 0x80) == 1:

@@ -13,6 +13,17 @@ class Task:
 		self.did_run = False
 		self.parent: Optional[Scheduler] = None
 
+	def reschedule(self, new_timeout: float) -> None:
+		with self.parent.queue_lock:
+			i = self.parent.task_queue.index(self)
+			if new_timeout > self.timeout:
+				# new larger timeout so we sift up.
+				self.timeout = new_timeout
+				heapq._siftup(self.parent.task_queue, i)
+			else:
+				self.timeout = new_timeout
+				heapq._siftdown(self.parent.task_queue, 0, i)
+
 	def cancel(self) -> None:
 		"""
 		Cancels the given task.
@@ -113,4 +124,4 @@ class Scheduler:
 						next_task.fire()
 						next_task.did_run = True
 					wait_time = self.wait_time()
-				# If wait time is None again, we have another task to fire.
+			# If wait time is None again, we have another task to fire.

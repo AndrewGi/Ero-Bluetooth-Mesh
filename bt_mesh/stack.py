@@ -87,7 +87,7 @@ class NetworkPDUSchedulerTask:
 	def __init__(self, task: scheduler.Task) -> None:
 		self.task = task
 
-class NetworkPDUScheduler:
+class TransportScheduler:
 
 	def __init__(self, send_network_pdu: Callable[[net.PDU], None]) -> None:
 		self.scheduler = scheduler.Scheduler()
@@ -117,6 +117,8 @@ class Stack(Serializable):
 		self.set_network(mesh_network)
 		self.local_context = local_context
 
+		self.seq_lock = threading.Lock()
+
 		self.incoming_network_pdu_bytes_queue: Queue[bytes] = Queue(maxsize=queue_max_sizes)
 		self.incoming_access_message_queue: Queue[access.AccessMessage] = Queue(maxsize=queue_max_sizes)
 		self.incoming_beacons_queue: Queue[beacon.Beacon] = Queue(maxsize=queue_max_sizes)
@@ -126,7 +128,8 @@ class Stack(Serializable):
 		self.outgoing_network_pdu_bytes_thread = threading.Thread(target=self.send_network_pdu_bytes_worker)
 		self.outgoing_network_pdu_bytes_thread.start()
 
-		self.reassemblers = transport.Reassemblers()
+		self.reassemblers = transport.Reassemblers(self.DEFAULT_TTL)
+		self.segmented_messages = transport.SegmentedMessages()
 
 	def set_network(self, new_network: network.Network) -> None:
 		self.mesh_network = new_network
@@ -295,33 +298,71 @@ class Stack(Serializable):
 			yield encrypted.unsegmented()
 
 	def encrypted_access_to_segmented(self, msg: transport.UpperEncryptedAccessPDU, ttl: TTL, times: int) -> transport.SegmentedMessage:
+		assert times > 0
 		if ttl == TTL.DEFAULT_TTL:
 			ttl = self.DEFAULT_TTL
-		with self.seq_lock:
-			raw_segments = list(msg.segmented(self.local_context.seq_allocate(msg.seg_n())))
-			segments = transport.SegmentedMessage(raw_segments, ttl)
-			return transport.SegmentedMessage(segments, ttl, times)
+		raw_segments = list(msg.segmented(self.seq_allocate(msg.seg_n())))
+		segments = transport.SegmentedMessage(raw_segments, ttl, times)
+		return segments
 
+	def first_send_segmented_message(self, msgs: transport.SegmentedMessage) -> None:
+		self.segmented_messages.ad
+
+	def send_lower_transport_pdus(self, pdus: List[transport.LowerPDU], first_seq: Seq) -> None:
+
+
+	def resend_segmented_message(self, msgs: transport.SegmentedMessage) -> None:
+		if msgs.retransmit <= 0:
+			raise ValueError("segments out of retransmits")
+		lowers: List[transport.LowerSegmentedPDU] = list(msgs.get_unacked())
+		def lower_to_pdu():
+			seq = self.seq_allocate(len(lowers))
+			for lower in lowers:
+				yield net.PDU(self.iv_index().ivi(), msgs.net_sm.nid, False, msgs.ttl, seq, msgs.src, msgs.dst,
+							  lower.to_bytes())
+				seq += 1
+		for net_pdu in lower_to_pdu():
+			self.queue_outgoing_network_pdu(net_pdu, msgs.net_sm.encryption_key)
+
+	def seq_allocate(self, amount: int) -> Seq:
+		with self.seq_lock:
+			return self.local_context.seq_allocate(amount)
 
 	def seq_and_inc(self) -> Seq:
 		with self.seq_lock:
-			self.local_context.seq_inc()
-			return self.local_context.seq
+			return self.local_context.seq_inc()
 
-	def access_network_pdus(self, msg: access.AccessMessage, net_sm: crypto.NetworkSecurityMaterial) -> Generator[
-		net.PDU, None, None]:
-		encrypted = self.encrypt_access(msg)
-		for lower_pdu in self._access_lower_pdus(msg, encrypted):
-			# pdu.seq gets set when send_network_pdu is called
-			yield net.PDU(self.iv_index().ivi(), net_sm.nid, False, msg.ttl, Seq(), msg.src, msg.dst,
-						  lower_pdu.to_bytes())
+	def lower_transport_to_network_pdu(self, lower_pdu: transport.LowerPDU, src: UnicastAddress, dst: Address,
+									   seq: Seq, nid: NID, ttl: TTL) -> net.PDU:
+		return net.PDU(self.iv_index().ivi(), nid, False, ttl, seq, src, dst,
+					  lower_pdu.to_bytes())
 
-	def lower_transport_to_network_pdu(self, lower_pdu: transport.LowerPDU):
+	def queue_access_message(self, msg: access.AccessMessage) -> None:
+		self.outgoing_access_message_queue.put(msg)
 
-	def send_access_message(self, msg: access.AccessMessage):
+	def running(self) -> bool:
+		return True
+
+	def send_access_message_worker(self) -> None:
+		while self.running():
+			next_item = self.outgoing_access_message_queue.get()
+			if next_item is None:
+				break
+			self.send_access_message(next_item)
+			self.outgoing_access_message_queue.task_done()
+
+	def send_access_message(self, msg: access.AccessMessage, publication: foundation.ModelPublication):
 		net_sm = cast(crypto.NetworkSecurityMaterial,
 					  self.mesh_network.global_context.get_net(msg.netkey_index).tx_sm())
 		encrypted_access = self.encrypt_access(msg)
+		ttl = publication.publish_ttl if msg.ttl == TTL.DEFAULT_TTL else msg.ttl
+		if encrypted_access.should_segment() or msg.force_segment:
+			# Use Segmentation to send the message.
+			segmented_generator = encrypted_access.segmented(self.seq_allocate(encrypted_access.seg_n()))
+			segmented_msg = transport.SegmentedMessage(list(segmented_generator), msg.src, msg.dst, net_sm, ttl)
+			self.first_send_segmented_message(segmented_msg)
+		else:
+
 		pdus = [pdu for pdu in self.access_network_pdus(msg, net_sm)]  # we update SEQ here so we want to do it fast
 		for pdu in pdus:
 			self.send_network_pdu(pdu, net_sm.encryption_key)
