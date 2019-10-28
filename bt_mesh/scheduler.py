@@ -14,8 +14,16 @@ class Task:
 		self.parent: Optional[Scheduler] = None
 
 	def reschedule(self, new_timeout: float) -> None:
+		assert not self.is_canceled, "can't reschedule a canceled task (sanity check)"  # can be removed if need be.
+		assert self.parent, "missing parent"
 		with self.parent.queue_lock:
-			i = self.parent.task_queue.index(self)
+			try:
+				i = self.parent.task_queue.index(self)
+			except ValueError as e:
+				# we don't exist in the parent queue.
+				self.timeout = new_timeout
+				self.parent.add_task(self)
+				return
 			if new_timeout > self.timeout:
 				# new larger timeout so we sift up.
 				self.timeout = new_timeout
@@ -70,6 +78,7 @@ class Scheduler:
 	def add_task(self, task: Task) -> None:
 		assert task.parent is None
 		assert not task.did_run, "task already ran"
+		assert task.timeout != 0, "timeout is zero"
 		notify = False
 		with self.queue_lock:
 			if not self.task_queue:
@@ -124,4 +133,4 @@ class Scheduler:
 						next_task.fire()
 						next_task.did_run = True
 					wait_time = self.wait_time()
-			# If wait time is None again, we have another task to fire.
+		# If wait time is None again, we have another task to fire.

@@ -294,7 +294,7 @@ class BlockAck:
 		return self.block.to_bytes(self.LEN, byteorder="big")
 
 	def is_done(self) -> bool:
-		return self.block == (2**(self.seg_n)-1)
+		return self.block == (2 ** (self.seg_n) - 1)
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'BlockAck':
@@ -327,7 +327,7 @@ class SegmentAcknowledgementPDU(UnsegmentedControlLowerPDU):
 
 	@classmethod
 	def control_from_bytes(cls, b: bytes) -> 'SegmentAcknowledgementPDU':
-		seq_zero_obo = int.from_bytes(b [:2], byteorder="big")
+		seq_zero_obo = int.from_bytes(b[:2], byteorder="big")
 		block_ack = BlockAck.from_bytes(b[2:2 + 4])
 		return cls(obo=(seq_zero_obo & 0x7000) == 0x7000, seq_zero=(seq_zero_obo >> 2) & 0x1FFF, block_ack=block_ack)
 
@@ -433,7 +433,6 @@ class SegmentAssembler:
 		return SegmentAcknowledgementPDU(self.obo, self.seq_zero, BlockAck(0, self.seg_n))
 
 
-
 class ReassemblerContext:
 	def __init__(self, parent: 'Reassemblers', segment_assembler: SegmentAssembler, ttl: TTL) -> None:
 		self.parent = parent
@@ -448,7 +447,7 @@ class ReassemblerContext:
 
 	def reset_timer(self) -> None:
 		assert self.task
-		self.task.reschedule(time.time()+self.segment_assembler.ack_timer(self.ttl.value))
+		self.task.reschedule(time.time() + self.segment_assembler.ack_timer(self.ttl.value))
 
 	def incomplete(self) -> None:
 		self.task.cancel()
@@ -478,6 +477,7 @@ class ReassemblerTask(scheduler.Task):
 
 	def fire(self) -> None:
 		self.parent.trigger_send_ack()
+
 
 class Reassemblers:
 	__slots__ = "contexts", "scheduler", "ttl"
@@ -525,24 +525,25 @@ class Reassemblers:
 
 
 class SegmentedMessage:
-	__slots__ = "pdus", "block_ack", "seg_n", "ttl", "retransmit", "seq_zero", "dst", "src", "net_sm"
+	__slots__ = "pdus", "block_ack", "seg_n", "ttl", "retransmits", "seq_zero", "dst", "src", "net_sm"
 
-	def __init__(self, pdus: List[LowerSegmentedPDU], src: UnicastAddress, dst: Address, net_sm: crypto.NetworkSecurityMaterial,
+	def __init__(self, pdus: List[LowerSegmentedPDU], src: UnicastAddress, dst: Address,
+				 net_sm: crypto.NetworkSecurityMaterial,
 				 ttl: Optional[TTL] = 10, retransmit: Optional[int] = 4):
 		self.pdus = pdus
 		self.seg_n = pdus[0].seg_n
 		self.block_ack = BlockAck(0, self.seg_n)
 		self.ttl = ttl
-		self.retransmit = retransmit
+		self.retransmits = retransmit
 		self.seq_zero = pdus[0].seq_zero
 		self.src = src
 		self.dst = dst
 		self.net_sm = net_sm
 
 	def ack_timeout(self) -> None:
-		if self.retransmit <= 0:
+		if self.retransmits <= 0:
 			raise ValueError("retransmits is 0")
-		self.retransmit -= 1
+		self.retransmits -= 1
 
 	def interval(self) -> int:
 		return 200 + 50 * self.ttl.value
@@ -560,46 +561,51 @@ class SegmentedMessage:
 			return
 		self.block_ack = ack.block_ack
 
-class SegmentedTask(scheduler.Task):
-	def __init__(self, parent: 'SegmentedContext') -> None:
-		super().__init__(time.time() + parent.segmented_message.interval())
+
+class SegmentedContext(scheduler.Task):
+
+	def __init__(self, msg: SegmentedMessage, parent: 'SegmentedMessages') -> None:
+		super().__init__(time.time() + msg.interval())
+		self.msg = msg
 		self.parent = parent
+		self.fire_function: Optional[Callable[SegmentedContext,], None] = None
 
 	def fire(self) -> None:
-		self.parent
-
-class SegmentedContext:
-
-	def __init__(self, segmented_message: SegmentedMessage) -> None:
-		self.segmented_message = segmented_message
-		self.task: Optional[scheduler.Task] = None
-
-	def send_lower_pdu(self):
+		if self.fire_function is None:
+			raise ValueError(f"{self.msg} missing fire_function")
+		else:
+			self.fire_function(self)
+		if self.msg.retransmits > 0:
+			self.msg.retransmits -= 1
+			self.reschedule(time.time() + self.msg.interval())
 
 
 class SegmentedMessages:
 
 	def __init__(self) -> None:
 		self.retransmit_scheduler = scheduler.Scheduler()
-		self.messages: Dict[SeqZero, SegmentedMessage] = dict()
-		self.seq_allocate: Optional[Callable[[int,], Seq]] = None
-
-
+		self.messages: Dict[SeqZero, SegmentedContext] = dict()
+		self.seq_allocate: Optional[Callable[[int, ], Seq]] = None
 
 	def add(self, segmented_msg: SegmentedMessage) -> None:
 		assert not segmented_msg.is_done()
-		self.messages[segmented_msg.seq_zero] = segmented_msg
+		context = SegmentedContext(segmented_msg, self)
+		self.messages[segmented_msg.seq_zero] = context
+		context.parent = self.retransmit_scheduler
+		# Trick the scheduler into fire the task and rescheduling the next one
+		context.fire()
 
 
 	def handle_ack(self, ack: SegmentAcknowledgementPDU) -> None:
 		try:
-			mh: SegmentedMessage = self.messages[ack.seq_zero]
+			mh: SegmentedMessage = self.messages[ack.seq_zero].segmented_message
 			mh.handle_ack(ack)
 			if mh.is_done():
 				del self.messages[ack.seq_zero]
 		except KeyError:
 			# unknown seq_zero so ignore.
 			return
+
 
 def make_lower_pdu(lower_pdu_bytes: bytes, ctl: bool):
 	if (lower_pdu_bytes[0] & 0x80) == 1:

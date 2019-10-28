@@ -254,9 +254,9 @@ class Stack(Serializable):
 				context.network_index = net_index
 				self._handle_network_pdu(net_pdu, context)
 			except crypto.InvalidMIC:
+				# Unable to decode network pdu
 				pass
 
-	# Unable to decode network pdu
 
 	def recv_network_pdu_bytes(self, pdu: bytes) -> None:
 		"""
@@ -289,29 +289,11 @@ class Stack(Serializable):
 		payload = msg.payload().to_bytes()
 		return transport.UpperAccessPDU(payload, msg.big_mic).encrypt(nonce, sm)
 
-	def _access_lower_pdus(self, msg: access.AccessMessage, encrypted: transport.UpperEncryptedAccessPDU) -> Generator[
-		Union[transport.SegmentedAccessLowerPDU, transport.UnsegmentedAccessLowerPDU], None, None]:
-		if msg.force_segment or encrypted.should_segment():
-			for seg in encrypted.segmented(self.local_context.seq):
-				yield seg
-		else:
-			yield encrypted.unsegmented()
-
-	def encrypted_access_to_segmented(self, msg: transport.UpperEncryptedAccessPDU, ttl: TTL, times: int) -> transport.SegmentedMessage:
-		assert times > 0
-		if ttl == TTL.DEFAULT_TTL:
-			ttl = self.DEFAULT_TTL
-		raw_segments = list(msg.segmented(self.seq_allocate(msg.seg_n())))
-		segments = transport.SegmentedMessage(raw_segments, ttl, times)
-		return segments
-
 	def first_send_segmented_message(self, msgs: transport.SegmentedMessage) -> None:
-		self.segmented_messages.ad
+		self.segmented_messages.add(msgs)
 
-	def send_lower_transport_pdus(self, pdus: List[transport.LowerPDU], first_seq: Seq) -> None:
-
-
-	def resend_segmented_message(self, msgs: transport.SegmentedMessage) -> None:
+	def resend_segmented_message(self, context: transport.SegmentedContext) -> None:
+		msgs = context.msg
 		if msgs.retransmit <= 0:
 			raise ValueError("segments out of retransmits")
 		lowers: List[transport.LowerSegmentedPDU] = list(msgs.get_unacked())

@@ -211,7 +211,7 @@ class TransmitParameters(ByteSerializable, Serializable):
 		self.steps = steps
 
 	def interval_ms(self) -> int:
-		return self.STEP_LEN * (self.count + 1)
+		return self.STEP_LEN * (self.steps + 1)
 
 	def to_bytes(self) -> bytes:
 		return U8(self.count | (self.steps << 3)).to_bytes()

@@ -1,6 +1,7 @@
 import struct
+import time
 
-from . import access
+from . import access, scheduler
 from .mesh import *
 from .serialize import *
 from typing import *
@@ -307,3 +308,43 @@ class ModelPublication(ByteSerializable):
 				   PublishPeriod.from_bytes(publish_period.to_bytes(1, byteorder="little")),
 				   PublishRetransmitParameters.from_bytes(publish_retransmit.to_bytes(1, byteorder="little")),
 				   access.ModelIdentifier.from_bytes(model_identifier))
+
+
+class PublishRetransmitTask(scheduler.Task):
+	def __init__(self, msg: access.AccessMessage, publication: PublishRetransmitParameters) -> None:
+		super().__init__(0.0)
+		self.msg = msg
+		self.transmissions = publication.steps
+		self.publication = publication
+		self.fire_access: Optional[Callable[[access.AccessMessage, ], None]] = None
+
+	def retransmit_msg(self) -> None:
+		if self.transmissions <= 0:
+			raise ValueError(f"{self.msg} out of retransmissions")
+		if self.fire_access is None:
+			raise ValueError(f"{self.msg} is missing fire_access")
+		self.fire_access(self.msg)
+		self.transmissions -= 1
+		if self.transmissions > 0:
+			self.schedule_next_publish()
+
+	def schedule_next_publish(self) -> None:
+		if self.transmissions <= 0:
+			raise ValueError(f"{self.msg} out of retransmissions")
+		self.reschedule(time.time() + self.publication.interval_ms() / 1000.0)
+
+	def fire(self) -> None:
+		self.retransmit_msg()
+
+
+class PublishRetransmitter:
+
+	def __init__(self) -> None:
+		self.retransmit_scheduler = scheduler.Scheduler()
+		self.fire_access: Optional[Callable[[access.AccessMessage, ], None]] = None
+
+	def add_message(self, msg: access.AccessMessage, publication: PublishRetransmitParameters) -> None:
+		task = PublishRetransmitTask(msg, publication)
+		task.fire_access = self.fire_access
+		task.retransmit_msg()  # first send.
+		self.retransmit_scheduler.add_task(task)
