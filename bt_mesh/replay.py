@@ -57,8 +57,11 @@ class ReplayCache(Serializable):
 			entry.src: entry.as_retired() for entry in self.seq_set if entry.new_iv
 		}
 
-	def get(self, address: UnicastAddress) -> Seq:
+	def get(self, address: UnicastAddress) -> ReplayEntry:
 		return self.seq_set[address]
+
+	def get_seq(self, address: UnicastAddress) -> Seq:
+		return self.get(address).seq
 
 	def set(self, address: UnicastAddress, seq: Seq) -> None:
 		self.seq_set[address].update_seq(seq)

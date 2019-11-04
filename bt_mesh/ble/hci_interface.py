@@ -1,5 +1,6 @@
 from . import hci
 
+
 class Interface:
 	def open(self) -> None:
 		raise NotImplementedError()
@@ -10,4 +11,5 @@ class Interface:
 	def is_open(self) -> bool:
 		raise NotImplementedError()
 
-	def
+	def write(self, b: bytes) -> None:
+		raise NotImplementedError()

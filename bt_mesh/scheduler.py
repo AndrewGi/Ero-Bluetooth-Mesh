@@ -72,7 +72,7 @@ class Scheduler:
 		self.task_condition = threading.Condition()
 		self.running = True
 		self.threshold = .002  # 2 ms threshold
-		self.thread = threading.Thread(target=self._scheduler_thread())
+		self.thread = threading.Thread(target=self._scheduler_thread)
 		self.thread.start()
 
 	def add_task(self, task: Task) -> None:

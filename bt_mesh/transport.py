@@ -62,11 +62,12 @@ class UpperEncryptedAccessPDU:
 	def should_segment(self) -> bool:
 		return len(self) <= UnsegmentedAccessLowerPDU.MAX_UPPER_LEN
 
-	def unsegmented(self) -> 'UnsegmentedAccessLowerPDU':
+	def access_unsegmented(self) -> 'UnsegmentedAccessLowerPDU':
 		if self.should_segment():
 			raise OverflowError(
 				f"max unsegmented size is {UnsegmentedAccessLowerPDU.MAX_UPPER_LEN} but message size is {len(self)}")
-		return UnsegmentedAccessLowerPDU(self.aid is not None, self.aid, crypto.data_and_mic_bytes(self.data, self.mic))
+		return UnsegmentedAccessLowerPDU(self.aid is not None, self.aid, self)
+
 
 	def seg_n(self) -> int:
 		seg_size = SegmentedAccessLowerPDU.SEG_LEN
@@ -443,6 +444,11 @@ class ReassemblerContext:
 		self.send_seg_ack: Optional[Callable[[SegmentAcknowledgementPDU, TTL], None]] = None
 
 	def is_incomplete(self) -> bool:
+		"""
+		returns if the segmented message is out of time (usually 10 seconds)
+		the timer is reset whenever a segment is received
+		:return:
+		"""
 		return time.time() - self.start_time > self.segment_assembler.incomplete_timer()
 
 	def reset_timer(self) -> None:
@@ -556,7 +562,8 @@ class SegmentedMessage:
 		return self.block_ack.is_done()
 
 	def handle_ack(self, ack: SegmentAcknowledgementPDU):
-		assert self.seq_zero == ack.seq_zero
+		if self.seq_zero != ack.seq_zero:
+			raise ValueError(f"seq_zero mismatch self:{self.seq_zero} != {ack.seq_zero}")
 		if ack.block_ack > self.block_ack:
 			return
 		self.block_ack = ack.block_ack
@@ -569,6 +576,17 @@ class SegmentedContext(scheduler.Task):
 		self.msg = msg
 		self.parent = parent
 		self.fire_function: Optional[Callable[SegmentedContext,], None] = None
+
+	def canceled(self) -> None:
+		pass
+
+	def handle_ack(self, ack: SegmentAcknowledgementPDU) -> None:
+		if self.msg.is_done():
+			return
+		self.cancel()
+		self.msg.handle_ack(ack)
+		if not self.msg.is_done():
+			self.fire()
 
 	def fire(self) -> None:
 		if self.fire_function is None:
@@ -595,12 +613,11 @@ class SegmentedMessages:
 		# Trick the scheduler into fire the task and rescheduling the next one
 		context.fire()
 
-
 	def handle_ack(self, ack: SegmentAcknowledgementPDU) -> None:
 		try:
-			mh: SegmentedMessage = self.messages[ack.seq_zero].segmented_message
+			mh: SegmentedContext = self.messages[ack.seq_zero]
 			mh.handle_ack(ack)
-			if mh.is_done():
+			if mh.msg.is_done():
 				del self.messages[ack.seq_zero]
 		except KeyError:
 			# unknown seq_zero so ignore.

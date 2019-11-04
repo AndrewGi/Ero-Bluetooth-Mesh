@@ -3,7 +3,7 @@ from queue import Queue
 from .mesh import *
 from . import bearer, crypto, net, access, transport, beacon, replay, network, foundation, scheduler
 from .models import model
-from threading import Lock
+
 
 class MessageContext:
 	__slots__ = "src", "dst", "seq", "iv_index", "network_index", "app_index", "ttl", "local_device_key", \
@@ -54,7 +54,6 @@ class Element:
 			element_model.send_access = self.send_access
 
 
-
 class Elements:
 	__slots__ = "elements", "send_access"
 
@@ -83,9 +82,11 @@ class Elements:
 			raise KeyError(f"{address} not in range of elements")
 		return self.elements[address.value - primary_address.value]
 
+
 class NetworkPDUSchedulerTask:
 	def __init__(self, task: scheduler.Task) -> None:
 		self.task = task
+
 
 class TransportScheduler:
 
@@ -122,7 +123,8 @@ class Stack(Serializable):
 		self.incoming_network_pdu_bytes_queue: Queue[bytes] = Queue(maxsize=queue_max_sizes)
 		self.incoming_access_message_queue: Queue[access.AccessMessage] = Queue(maxsize=queue_max_sizes)
 		self.incoming_beacons_queue: Queue[beacon.Beacon] = Queue(maxsize=queue_max_sizes)
-		self.outgoing_access_message_queue: Queue[access.AccessMessage] = Queue(maxsize=queue_max_sizes)
+		self.outgoing_access_message_queue: Queue[Tuple[access.AccessMessage, foundation.ModelPublication]] = Queue(
+			maxsize=queue_max_sizes)
 		self.outgoing_network_pdu_bytes_queue: Queue[bytes] = Queue(maxsize=queue_max_sizes)
 
 		self.outgoing_network_pdu_bytes_thread = threading.Thread(target=self.send_network_pdu_bytes_worker)
@@ -257,7 +259,6 @@ class Stack(Serializable):
 				# Unable to decode network pdu
 				pass
 
-
 	def recv_network_pdu_bytes(self, pdu: bytes) -> None:
 		"""
 		Queue's encrypted network pdu to be processed by the stack
@@ -297,12 +298,14 @@ class Stack(Serializable):
 		if msgs.retransmit <= 0:
 			raise ValueError("segments out of retransmits")
 		lowers: List[transport.LowerSegmentedPDU] = list(msgs.get_unacked())
+
 		def lower_to_pdu():
 			seq = self.seq_allocate(len(lowers))
 			for lower in lowers:
 				yield net.PDU(self.iv_index().ivi(), msgs.net_sm.nid, False, msgs.ttl, seq, msgs.src, msgs.dst,
 							  lower.to_bytes())
 				seq += 1
+
 		for net_pdu in lower_to_pdu():
 			self.queue_outgoing_network_pdu(net_pdu, msgs.net_sm.encryption_key)
 
@@ -317,7 +320,7 @@ class Stack(Serializable):
 	def lower_transport_to_network_pdu(self, lower_pdu: transport.LowerPDU, src: UnicastAddress, dst: Address,
 									   seq: Seq, nid: NID, ttl: TTL) -> net.PDU:
 		return net.PDU(self.iv_index().ivi(), nid, False, ttl, seq, src, dst,
-					  lower_pdu.to_bytes())
+					   lower_pdu.to_bytes())
 
 	def queue_access_message(self, msg: access.AccessMessage) -> None:
 		self.outgoing_access_message_queue.put(msg)
@@ -327,10 +330,11 @@ class Stack(Serializable):
 
 	def send_access_message_worker(self) -> None:
 		while self.running():
-			next_item = self.outgoing_access_message_queue.get()
+			next_item: Tuple[
+				access.AccessMessage, foundation.ModelPublication] = self.outgoing_access_message_queue.get()
 			if next_item is None:
 				break
-			self.send_access_message(next_item)
+			self.send_access_message(next_item[0], next_item[1])
 			self.outgoing_access_message_queue.task_done()
 
 	def send_access_message(self, msg: access.AccessMessage, publication: foundation.ModelPublication):
@@ -344,10 +348,11 @@ class Stack(Serializable):
 			segmented_msg = transport.SegmentedMessage(list(segmented_generator), msg.src, msg.dst, net_sm, ttl)
 			self.first_send_segmented_message(segmented_msg)
 		else:
-
-		pdus = [pdu for pdu in self.access_network_pdus(msg, net_sm)]  # we update SEQ here so we want to do it fast
-		for pdu in pdus:
-			self.send_network_pdu(pdu, net_sm.encryption_key)
+			# send unsegmeneted
+			unsegmented = encrypted_access.access_unsegmented()
+			net_pdu = self.lower_transport_to_network_pdu(unsegmented, msg.src, msg.dst, self.seq_and_inc(), net_sm.nid,
+														  ttl)
+			self.queue_outgoing_network_pdu(net_pdu, net_sm.encryption_key)
 
 	def send_network_pdu_bytes_worker(self) -> None:
 		while True:
@@ -361,4 +366,5 @@ class Stack(Serializable):
 		self.stack_bearer.send_network_pdu(pdu, transmit_parameters)
 
 	def queue_outgoing_network_pdu(self, network_pdu: net.PDU, key: crypto.EncryptionKey):
-		self.outgoing_network_pdu_bytes_queue.put(crypto.data_and_mic_bytes(*network_pdu.encrypt(key, self.iv_index())), self.local_context.transmit_parameters)
+		self.outgoing_network_pdu_bytes_queue.put(crypto.data_and_mic_bytes(*network_pdu.encrypt(key, self.iv_index())),
+												  self.local_context.transmit_parameters)

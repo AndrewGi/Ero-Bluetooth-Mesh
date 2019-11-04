@@ -17,7 +17,7 @@ class BlesonBearer(pb_adv.AdvBearer):
 		self.adapter.set_advertising_parameter()
 		self.observer = bleson.Observer(self.adapter)
 		self.observer.on_advertising_data = self.on_advertisement
-		self.wait_time = 0.015
+		self.wait_time = 0.005
 		self.observer.start()
 		self.adapter_lock = threading.Lock()
 
