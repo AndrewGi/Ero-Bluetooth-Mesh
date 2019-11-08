@@ -3,10 +3,14 @@ from uuid import UUID
 import sys
 
 if __name__ == "__main__":
+	print("loading mesh...")
 	from bt_mesh import mesh, prov, beacon, network, stack, crypto
+	print("loading config")
 	from bt_mesh.config import config_client
+	print("loading bearer")
 	from bt_mesh.bearers import bleson_bearer
 	from bt_mesh.bearers.pb_adv import AdvBearer, Link, Links
+	print("importing done")
 else:
 	from .bt_mesh import mesh, prov, beacon, network, stack, crypto
 	from .bt_mesh.bearers.pb_adv import AdvBearer, Link, Links
@@ -351,12 +355,9 @@ class ConfigCLI(CLIHandler):
 
 
 def main() -> None:
-	if __name__ == "__main__":
-		from bt_mesh.bearers import bleson_bearer
-	else:
-		from .bt_mesh.bearers import bleson_bearer
-
+	print("running main...")
 	bearer = bleson_bearer.BlesonBearer()
+	print("bearer ready")
 	session = Session(bearer)
 	if len(sys.argv) > 1:
 		if sys.argv[1] == "-pall":
