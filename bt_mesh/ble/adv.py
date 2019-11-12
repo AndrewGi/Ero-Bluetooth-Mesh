@@ -1,4 +1,6 @@
+import datetime
 import enum
+from typing import *
 from .. import serialize
 from . import bt
 
@@ -31,7 +33,7 @@ class AdvData(serialize.ByteSerializable):
 
 
 class AdvPDU(serialize.ByteSerializable):
-	__slots__ = "address", "data"
+	__slots__ = "header", "address", "data"
 
 	def __init__(self, address: bt.Address, data: AdvData) -> None:
 		self.address = address
@@ -44,3 +46,29 @@ class AdvPDU(serialize.ByteSerializable):
 	def from_bytes(cls, b: bytes) -> 'AdvPDU':
 		assert len(b) > 6, "6 bytes for adv_address + 0-31 for adv_data"
 		return cls(bt.Address.from_bytes(b[:6]), AdvData.from_bytes(b[6:]))
+
+
+class AdvReceived(serialize.Serializable):
+	__slots__ = "pdu", "rssi", "time_at"
+
+	def __init__(self, pdu: AdvPDU, time_at: datetime.datetime, rssi: Optional[int] = None) -> None:
+		self.pdu = pdu
+		self.time_at = time_at
+		self.rssi = rssi
+
+	def to_dict(self) -> serialize.DictValue:
+		out = {
+			"pdu": serialize.base64_encode(self.pdu.to_bytes()),
+			"time_at": self.time_at.strftime("%Y-%m-%d %H:%M:%S")
+		}
+		if self.rssi:
+			out["rssi"] = self.rssi
+		return out
+
+	@classmethod
+	def from_dict(cls, d: serialize.DictValue) -> 'AdvReceived':
+		pdu = AdvPDU.from_bytes(serialize.base64_decode(d["pdu"]))
+		time_at = datetime.datetime.strptime("%Y-%m-%d %H:%M:%S", d["time_at"])
+		rssi = None if "rssi" not in d else int(d["rssi"])
+		return cls(pdu, time_at, rssi)
+

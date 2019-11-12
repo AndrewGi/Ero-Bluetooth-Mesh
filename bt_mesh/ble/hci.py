@@ -147,6 +147,7 @@ class HostControllerBasebandOpcode(OCF):
 	ReadPageScanMode = 0x003D
 	WritePageScanMode = 0x003E
 
+
 class LEControllerOpcode(OCF):
 	SetEventMask = 0x0001
 	ReadBufferSize = 0x0002
@@ -254,6 +255,9 @@ class CommandParameters(ByteSerializable, abc.ABC):
 	def parameters_from_bytes(cls, b: bytes) -> 'CommandParameters':
 		raise NotImplementedError()
 
+	def as_command(self) -> 'Command':
+		return Command(self.Opcode, self)
+
 
 class Command(ByteSerializable):
 	__slots__ = "opcode", "parameters"
@@ -274,6 +278,92 @@ class Command(ByteSerializable):
 
 	def __repr__(self) -> str:
 		return f"Command({self.opcode}, {self.parameters})"
+
+
+class EventsCode(U8, enum.Enum):
+	InquiryComplete = 0x01
+	InquiryResult = 0x02
+	ConnectionComplete = 0x03
+	ConnectionRequest = 0x04
+	DisconnectionComplete = 0x05
+	AuthenticationComplete = 0x06
+	RemoteNameRequestComplete = 0x07
+	EncryptionChange = 0x08
+	ChangeConnectionLinkKeyComplete = 0x09
+	MasterLinkKeyComplete = 0x0A
+	ReadRemoteSupportedFeaturesComplete = 0x0B
+	ReadRemoteVersionInformationComplete = 0x0C
+	QoSSetupComplete = 0x0D
+	CommandComplete = 0x0E
+	CommandStatus = 0x0F
+	FlushOccurred = 0x11
+	RoleChange = 0x12
+	NumberOfCompletedPackets = 0x13
+	ModeChange = 0x14
+	ReturnLinkKeys = 0x15
+	PINCodeRequest = 0x16
+	LinkKeyRequest = 0x17
+	LinkKeyNotification = 0x18
+	LoopbackCommand = 0x19
+	DataBufferOverflow = 0x1A
+	MaxSlotsChange = 0x1B
+	ReadClockOffsetComplete = 0x1C
+	ConnectionPacketTypeChanged = 0x1D
+	QoSViolation = 0x1E
+	PageScanRepetitionModeChange = 0x20
+	FlowSpecificationComplete = 0x21
+	InquiryResultWithRSSI = 0x22
+	ReadRemoteExtendedFeaturesComplete = 0x23
+	SynchronousConnectionComplete = 0x2C
+	SynchronousConnectionChanged = 0x2D
+	SniffSubrating = 0x2E
+	ExtendedInquiryResult = 0x2F
+	EncryptionKeyRefreshComplete = 0x30
+	IOCapabilityRequest = 0x33
+	IOCapabilityResponse = 0x32
+	UserConfirmationRequest = 0x33
+	UserPasskeyRequest = 0x34
+	RemoteOOBDataRequest = 0x35
+	SimplePairingComplete = 0x36
+	LinkSupervisionTimeoutChanged = 0x38
+	EnhancedFlushComplete = 0x39
+	UserPasskeyNotification = 0x3B
+	KeypressNotification = 0x3C
+	RemoteHostSupportedFeaturesNotification = 0x3D
+	PhysicalLinkComplete = 0x40
+	ChannelSelected = 0x41
+	DisconnectionPhysicalLinkComplete = 0x42
+	PhysicalLinkLostEarlyWarning = 0x43
+	PhysicalLinkRecovery = 0x44
+	LogicalLinkComplete = 0x45
+	DisconnectionLogicalLinkComplete = 0x46
+	FlowSpecModifyComplete = 0x47
+	NumberOfCompletedDataBlocks = 0x48
+	ShortRangeModeChangeComplete = 0x4C
+	AMPStatusChange = 0x4D
+	AMPStartTest = 0x49
+	AMPTestEnd = 0x4A
+	AMPReceiverReport = 0x4B
+	LEMeta = 0x3E
+
+
+class LEMetaEvents(U8, enum.Enum):
+	LEConnectionComplete = 0x01
+	LEAdvertisingReport = 0x02
+	LEConnectionUpdateComplete = 0x03
+	LEReadRemoteUsedFeaturesEvent = 0x04
+	LELongTermKeyRequest = 0x05
+
+
+class Event(ByteSerializable):
+	pass
+
+
+class CommandDoneEvent(ByteSerializable):
+
+	def __init__(self, status: 'ErrorCode') -> None:
+		self.status = status
+
 
 class ErrorCode(enum.IntEnum):
 	Ok = 0x00
