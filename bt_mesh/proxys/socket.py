@@ -17,8 +17,8 @@ class ProxyMessageType(enum.IntEnum):
 
 
 class SocketProxyPipe:
-	def __init__(self, secure_socket: ssl.SSLSocket):
-		self.sock: ssl.SSLSocket = secure_socket
+	def __init__(self, secure_socket: socket.socket):
+		self.sock: socket.socket = secure_socket
 		self.is_open: bool = True
 		self.read_lock: threading.Lock = threading.Lock()
 		self.write_lock: threading.Lock = threading.Lock()
@@ -92,7 +92,6 @@ class SocketProxyServer(proxy.ProxyServer):
 			pdu = self.pipe.read_proxy_pdu()
 			self.recv_proxy_pdu(pdu)
 
-
 class SocketProxyClient(proxy.ProxyClient):
 	def __init__(self, pipe: SocketProxyPipe):
 		super().__init__()
@@ -141,3 +140,6 @@ def connect_pipe(hostname: str, port: int, ssl_context: ssl.SSLContext) -> Socke
 	ssock = ssl_context.wrap_socket(sock, server_hostname=hostname)
 	ssock.connect((hostname, port))
 	return SocketProxyPipe(ssock)
+
+
+class

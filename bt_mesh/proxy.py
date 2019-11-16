@@ -85,6 +85,7 @@ class ProxyBearer(bearer.Bearer, ABC):
 		super().__init__(None)
 		self.sar_assembler: Optional[SARAssembler] = None
 		self.transmit_parameters: mesh.TransmitParameters = mesh.TransmitParameters.default()
+
 	@classmethod
 	def bearer_type(cls):
 		return bearer.BearerType.Proxy

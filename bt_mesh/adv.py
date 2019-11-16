@@ -34,6 +34,7 @@ class AdvertisingHeader:
 
 	@classmethod
 	def from_bytes(cls, b: bytes) -> 'AdvertisingHeader':
+		assert len(b) == 2
 		pdu_type = b[0] >> 4
 		ch_sel = b[0] & 0x4 == 1
 		tx_add = b[0] & 0x2 == 1
@@ -48,6 +49,7 @@ class PDU:
 	def to_bytes(self) -> bytes:
 		raise NotImplementedError()
 
+	@classmethod
 	def from_bytes(cls, b: bytes):
 		raise NotImplementedError()
 

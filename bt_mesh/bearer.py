@@ -19,7 +19,7 @@ class Bearer:
 		self.recv_network_pdu: Optional[Callable[[beacon.Beacon, ], None]] = None
 
 	@classmethod
-	def bearer_type(cls):
+	def bearer_type(cls) -> BearerType:
 		raise NotImplementedError()
 
 	def send_network_pdu(self, network_pdu: bytes, parameters: mesh.TransmitParameters):
