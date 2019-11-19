@@ -25,7 +25,7 @@ class CryptoTests(unittest.TestCase):
 						 crypto.k2(net_key, b'\x00'))
 
 	def test_k3(self):
-		self.assertEqual(0xff046958233db014, crypto.k3(0xf7a2a44f8e8a8029064f173ddc1e2b00.to_bytes(16, byteorder="big")))
+		self.assertEqual(0xff046958233db014, crypto.k3(crypto.Key(0xf7a2a44f8e8a8029064f173ddc1e2b00.to_bytes(16, byteorder="big"))))
 
 	def test_k4(self):
 		self.assertEqual(mesh.NID(0x38), crypto.k4(0x3216d1509884b533248541792b877f98.to_bytes(16, byteorder="big")))

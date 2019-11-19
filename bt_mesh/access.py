@@ -9,7 +9,7 @@ class ModelID(U16):
 ACK_TIMEOUT = 30  # 30 seconds is minimum act timeout
 
 
-class Opcode:
+class Opcode(ByteSerializable):
 	__slots__ = ("opcode", "company_id")
 
 	def __init__(self, opcode: int, company_id: Optional[int] = None):
@@ -101,7 +101,7 @@ class AccessPayload:
 		return cls(opcode, b[len(opcode):])
 
 
-class AccessMessage:
+class AccessMessage(Serializable):
 	__slots__ = "src", "dst", "opcode", "payload", "big_mic", "ttl", "appkey_index", "netkey_index", \
 				"remote_device_key", "local_device_key", "force_segment"
 
@@ -130,6 +130,32 @@ class AccessMessage:
 
 	def access_payload(self) -> AccessPayload:
 		return AccessPayload(self.opcode, self.payload)
+
+	def to_dict(self) -> DictValue:
+		return {
+			"src": self.src.value,
+			"dst": self.dst.value,
+			"ttl": self.ttl.value,
+			"opcode": self.opcode.as_bytes().hex(),
+			"payload": self.payload.hex(),
+			"netkey_index": self.netkey_index.value,
+			"appkey_index": self.appkey_index.value if self.appkey_index else None,
+			"big_mic": self.big_mic,
+			"local_device_key": self.local_device_key,
+			"remote_device_key": self.remote_device_key,
+			"force_seg": self.force_segment,
+		}
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> 'AccessMessage':
+		src = UnicastAddress.from_int(d["src"])
+		dst = Address.from_int(d["dst"])
+		ttl = TTL(d["ttl"])
+		opcode = Opcode.from_bytes_hex(d["opcode"])
+		payload = bytes.fromhex(d["payload"])
+		netkey_index = NetKeyIndex(d["netkey_index"])
+		appkey_index = AppKeyIndex(d["appkey_index"]) if d.get("appkey_index") is int else None
+
 
 
 class AccessHandler:

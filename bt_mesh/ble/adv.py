@@ -17,7 +17,7 @@ class PDUType(serialize.U8, enum.Enum):
 
 class AdvData(serialize.ByteSerializable):
 	MAX_LEN = 31
-	__slots__ = "dat",
+	__slots__ = "data",
 
 	def __init__(self, data: bytes) -> None:
 		if len(data) > self.MAX_LEN:

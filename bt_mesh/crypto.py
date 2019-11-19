@@ -247,13 +247,14 @@ class ECCKeyPoint:
 		self.y = y
 
 
+ECC_NUM_LEN = 32
 ec_curve = ec.SECP256R1()
 
 
-class ECCPublicKey:
+class ECCPublicKey(ByteSerializable):
 	__slots__ = "public_key"
 
-	def __init__(self, public_key: ec.EllipticCurvePublicKey):
+	def __init__(self, public_key: ec.EllipticCurvePublicKeyWithSerialization):
 		if public_key.curve.name != ec_curve.name:
 			raise ValueError(f"public key not NIST-256 key ({public_key.curve.name})")
 		self.public_key = public_key
@@ -262,12 +263,17 @@ class ECCPublicKey:
 	def point(self) -> ECCKeyPoint:
 		if self.public_key.curve.name != ec_curve.name:
 			raise ValueError("public key not NIST-256 key")
-		nums = self.public_key.public_numbers()  # type: ec.EllipticCurvePublicNumbers
+		nums: ec.EllipticCurvePublicNumbers = self.public_key.public_numbers()
 		return ECCKeyPoint(x=nums.x, y=nums.y)
 
 	@classmethod
 	def from_point(cls, point: ECCKeyPoint) -> 'ECCPublicKey':
 		return cls(ec.EllipticCurvePublicNumbers(point.x, point.y, ec_curve).public_key(default_backend()))
+
+	def make_private_key(self, private_value: Union[int, bytes]) -> 'ECCPrivateKey':
+		value = private_value if isinstance(private_value, int) else int.from_bytes(private_value, "big")
+		return ECCPrivateKey(ec.EllipticCurvePrivateNumbers(value, self.public_key.public_numbers())
+							 .private_key(default_backend()))
 
 
 class ECDHSharedSecret(Key):
@@ -280,7 +286,7 @@ class ECDHSharedSecret(Key):
 class ECCPrivateKey:
 	__slots__ = "private_key",
 
-	def __init__(self, private_key: ec.EllipticCurvePrivateKey):
+	def __init__(self, private_key: ec.EllipticCurvePrivateKeyWithSerialization):
 		self.private_key = private_key
 
 	def public_key(self) -> ECCPublicKey:
@@ -293,6 +299,15 @@ class ECCPrivateKey:
 	def make_shared_secret(self, peer_public: ECCPublicKey) -> ECDHSharedSecret:
 		assert isinstance(peer_public, ECCPublicKey)
 		return ECDHSharedSecret(self.private_key.exchange(ec.ECDH(), peer_public.public_key))
+
+	def private_value(self) -> int:
+		return cast(ec.EllipticCurvePrivateNumbers, self.private_key.private_numbers()).private_value
+
+	def to_bytes(self) -> bytes:
+		"""
+		:return: returns private key value as big endian bytes
+		"""
+		return self.private_value().to_bytes(ECC_NUM_LEN, "big")
 
 
 def aes_cmac(key: Key, data: bytes) -> MAC:
@@ -667,7 +682,7 @@ class LocalContext(Serializable):
 
 	@classmethod
 	def new_provisioner(cls) -> 'LocalContext':
-		return cls(Seq(0), TransmitParameters(4, 20), None)
+		return cls(Seq(), TransmitParameters(4, 20), None)
 
 	def seq_inc(self) -> Seq:
 		return self.seq_allocate(1)

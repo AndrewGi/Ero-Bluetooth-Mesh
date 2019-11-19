@@ -139,6 +139,12 @@ class TransactionStartPDU(GenericProvisioningPDU):
 	def gpcf() -> GPCF:
 		return GPCF.TRANSACTION_START
 
+	def __eq__(self, other: 'TransactionStartPDU') -> bool:
+		if not isinstance(other, TransactionStartPDU):
+			return False
+		return (self.transaction_number == other.transaction_number and self.seg_n == other.seg_n and
+					self.length == other.length and self.fcs == other.fcs and self.data == other.data)
+
 
 class TransactionAckPDU(GenericProvisioningPDU):
 

@@ -19,6 +19,10 @@ class ByteSerializable:
 	def from_bytes(cls, b: bytes):
 		raise NotImplementedError()
 
+	@classmethod
+	def from_bytes_hex(cls, hex_str: str):
+		return cls.from_bytes(bytes.fromhex(hex_str))
+
 
 DictValue = NewType('DictValue', Union[str, int, float, bool, None, Dict[str, 'DictValue'], List['DictValue']])
 
