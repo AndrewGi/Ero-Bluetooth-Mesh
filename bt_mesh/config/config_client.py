@@ -30,7 +30,7 @@ class RelayStateClient(SetStateClient):
 
 	def set(self, new_state: FullState, ack: Optional[bool] = True) -> None:
 		assert ack
-		self.publish(ConfigOpcode.RELAY_SET, Relay.Set(self.relay_state(), self.retransmit_parameters()))
+		self.publish(ConfigOpcode.RELAY_SET, new_state)
 
 	def relay_state(self) -> RelayState:
 		return self.state[0]
@@ -47,6 +47,8 @@ class NetKeyListStateClient(State):
 		super().__init__()
 		self.key_index_list: List[NetKeyIndex] = list()
 		self.last_status: foundation.Status = NetKeyStatus.Success
+		self.status_condition = Condition()
+		self.list_condition = Condition()
 		self.add_handler(ConfigOpcode.NETKEY_LIST, self.on_list)
 		self.add_handler(ConfigOpcode.NETKEY_STATUS, self.on_status)
 
@@ -71,11 +73,13 @@ class NetKeyListStateClient(State):
 		self.last_status = new_list.status
 		self.check_status()
 		self.key_index_list = new_list.net_key_indexes
+		self.list_condition.notify_all()
 
 	def on_status(self, msg: access.AccessMessage):
 		new_status = NetKeyList.Status.from_bytes(msg.payload)
 		self.last_status = new_status.status
 		self.check_status()
+		self.status_condition.notify_all()
 
 
 class AppKeyListStateClient(State):

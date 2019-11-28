@@ -57,7 +57,8 @@ class Links:
 	def __init__(self, link_bearer: AdvBearer) -> None:
 		self.links: Dict[LinkID, Link] = dict()
 		self.link_bearer = link_bearer
-		self.link_bearer.recv_pb_adv = self.recv_pb_adv
+		if self.link_bearer:
+			self.link_bearer.recv_pb_adv = self.recv_pb_adv
 
 	def close_link(self, link_id: LinkID) -> None:
 		del self.links[link_id]
