@@ -673,16 +673,15 @@ class GlobalContext(Serializable):
 
 
 class LocalContext(Serializable):
-	__slots__ = "seq", "device_sm", "transmit_parameters"
+	__slots__ = "seq", "device_sm"
 
-	def __init__(self, seq: Seq, transmit_parameters: TransmitParameters, device_sm: Optional[DeviceSecurityMaterial]):
+	def __init__(self, seq: Seq, device_sm: Optional[DeviceSecurityMaterial]):
 		self.seq = seq
-		self.transmit_parameters = transmit_parameters
 		self.device_sm = device_sm
 
 	@classmethod
-	def new_provisioner(cls) -> 'LocalContext':
-		return cls(Seq(), TransmitParameters(4, 20), None)
+	def new(cls) -> 'LocalContext':
+		return cls(Seq(),  None)
 
 	def seq_inc(self) -> Seq:
 		return self.seq_allocate(1)
@@ -695,14 +694,12 @@ class LocalContext(Serializable):
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
-			"seq": self.seq,
-			"transmit_parameters": self.transmit_parameters.to_dict(),
-			"device_key": str(self.device_sm.key)
+			"seq": self.seq.value,
+			"device_key": self.device_sm.key.hex() if self.device_sm else None
 		}
 
 	@classmethod
 	def from_dict(cls, d: Dict[str, Any]) -> 'LocalContext':
 		seq = Seq(d["seq"])
-		transmit_parameters = TransmitParameters.from_dict(d["transmit_parameters"])
 		device_key = DeviceKey.from_str(d["device_key"])
-		return cls(seq, transmit_parameters, DeviceSecurityMaterial(device_key))
+		return cls(seq, DeviceSecurityMaterial(device_key))

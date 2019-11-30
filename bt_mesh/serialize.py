@@ -1,3 +1,4 @@
+from abc import ABC
 from typing import *
 from functools import total_ordering
 import base64
@@ -27,13 +28,19 @@ class ByteSerializable:
 DictValue = NewType('DictValue', Union[str, int, float, bool, None, Dict[str, 'DictValue'], List['DictValue']])
 
 
-class Serializable:
+class ToDict(ABC):
 	def to_dict(self) -> DictValue:
 		raise NotImplementedError()
 
+
+class FromDict(ABC):
 	@classmethod
 	def from_dict(cls, d: DictValue) -> Any:
 		raise NotImplementedError()
+
+
+class Serializable(ToDict, FromDict, ABC):
+	pass
 
 
 IntOperand = Union['Integer', int]

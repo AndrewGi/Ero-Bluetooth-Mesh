@@ -38,7 +38,7 @@ class MessageContext:
 		return crypto.ApplicationNonce(self.big_access_mic, self.seq, self.src, self.dst, self.iv_index)
 
 
-class Element:
+class Element(ToDict):
 	__slots__ = "element_id", "element_address", "models", "send_access"
 
 	def __init__(self, element_id: foundation.ElementID, element_address: UnicastAddress,
@@ -48,13 +48,20 @@ class Element:
 		self.models = models
 		self.send_access: Optional[Callable[[access.AccessMessage], None]] = None
 
+	def to_dict(self) -> DictValue:
+		return {
+			"id": self.element_id.value,
+			"address": self.element_address.value,
+			"models": [m.to_dict() for m in self.models]
+		}
+
 	def set_send_access(self, send_access: Callable[[access.AccessMessage], None]) -> None:
 		self.send_access = send_access
 		for element_model in self.models:
 			element_model.send_access = self.send_access
 
 
-class Elements:
+class Elements(ToDict):
 	__slots__ = "elements", "send_access"
 
 	def __init__(self, elements: List[Element]) -> None:
@@ -82,6 +89,11 @@ class Elements:
 			raise KeyError(f"{address} not in range of elements")
 		return self.elements[address.value - primary_address.value]
 
+	def to_dict(self) -> DictValue:
+		return {
+			"elements": [e.to_dict() for e in self.elements]
+		}
+
 
 class NetworkPDUSchedulerTask:
 	def __init__(self, task: scheduler.Task) -> None:
@@ -95,11 +107,32 @@ class TransportScheduler:
 		self.send_network_pdu: Callable[[net.PDU], None] = send_network_pdu
 
 
-class Stack(Serializable):
+class LocalContext(Serializable):
+	def __init__(self, crypto_context: crypto.LocalContext, transmit_parameters: NetworkTransmitParameters) -> None:
+		self.crypto_context = crypto_context
+		self.transmit_parameters = transmit_parameters
+
+	def to_dict(self) -> DictValue:
+		return {
+			"crypto_context": self.crypto_context.to_dict(),
+			"transmit_parameters": self.transmit_parameters.to_dict()
+		}
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> Any:
+		return cls(crypto.LocalContext.from_dict(d["crypto_context"]),
+				   NetworkTransmitParameters.from_dict(d["transmit_parameters"]))
+
+	@classmethod
+	def new(cls) -> 'LocalContext':
+		return cls(crypto.LocalContext.new(), NetworkTransmitParameters(4, 10))
+
+
+class Stack(ToDict):
 	DEFAULT_TTL = TTL(0x10)
 	DEFAULT_QUEUE_SIZE = 25
 
-	def __init__(self, stack_bearer: bearer.Bearer, local_context: crypto.LocalContext, mesh_network: network.Network,
+	def __init__(self, stack_bearer: bearer.Bearer, local_context: LocalContext, mesh_network: network.Network,
 				 queue_max_sizes: Optional[int] = None):
 		"""
 		Initaized a Bluetooth Mesh stack for decode and encoding messages from network layer to access layer
@@ -133,9 +166,14 @@ class Stack(Serializable):
 		self.reassemblers = transport.Reassemblers(self.DEFAULT_TTL)
 		self.segmented_messages = transport.SegmentedMessages()
 
+		self.elements = Elements(list())
+
+	def crypto_context(self) -> crypto.LocalContext:
+		return self.local_context.crypto_context
+
 	def set_network(self, new_network: network.Network) -> None:
 		self.mesh_network = new_network
-		self.replay_cache = replay.ReplayCache(self.iv_index())
+		self.replay_cache = replay.ReplayCache(self.iv_index(), dict())
 
 	def iv_index(self) -> IVIndex:
 		return self.mesh_network.global_context.iv_index
@@ -153,7 +191,9 @@ class Stack(Serializable):
 	def to_dict(self) -> Dict[str, Any]:
 		return {
 			"local_context": self.local_context.to_dict(),
-			"replay_cache": self.replay_cache.to_dict()
+			"replay_cache": self.replay_cache.to_dict(),
+			"elements": self.elements.to_dict(),
+			"network": self.mesh_network.to_dict(),
 		}
 
 	@staticmethod
@@ -173,7 +213,7 @@ class Stack(Serializable):
 	def _handle_encrypted_access(self, pdu: transport.UpperEncryptedAccessPDU, context: MessageContext) -> None:
 		if not pdu.akf():
 			# try to decrypt with local device key
-			local_device_sm = self.local_context.device_sm
+			local_device_sm = self.crypto_context().device_sm
 			device_nonce = context.device_nonce()
 			try:
 				upper_access = pdu.decrypt(device_nonce, local_device_sm)
@@ -275,16 +315,16 @@ class Stack(Serializable):
 
 	def app_nonce(self, msg: access.AccessMessage) -> crypto.ApplicationNonce:
 		assert not msg.device_key() and msg.appkey_index is not None
-		return crypto.ApplicationNonce(msg.big_mic, self.local_context.seq, msg.src, msg.dst,
+		return crypto.ApplicationNonce(msg.big_mic, self.crypto_context().seq, msg.src, msg.dst,
 									   self.mesh_network.global_context.iv_index)
 
 	def device_nonce(self, msg: access.AccessMessage) -> crypto.DeviceNonce:
 		assert msg.device_key() and msg.appkey_index is None
-		return crypto.DeviceNonce(msg.big_mic, self.local_context.seq, msg.src, msg.dst,
+		return crypto.DeviceNonce(msg.big_mic, self.crypto_context().seq, msg.src, msg.dst,
 								  self.mesh_network.global_context.iv_index)
 
 	def encrypt_access(self, msg: access.AccessMessage) -> transport.UpperEncryptedAccessPDU:
-		sm = self.local_context.device_sm if msg.device_key() else self.mesh_network.global_context.get_app(
+		sm = self.crypto_context().device_sm if msg.device_key() else self.mesh_network.global_context.get_app(
 			msg.appkey_index)
 		nonce = self.device_nonce(msg) if msg.device_key() else self.app_nonce(msg)
 		payload = msg.payload().to_bytes()
@@ -311,11 +351,11 @@ class Stack(Serializable):
 
 	def seq_allocate(self, amount: int) -> Seq:
 		with self.seq_lock:
-			return self.local_context.seq_allocate(amount)
+			return self.crypto_context().seq_allocate(amount)
 
 	def seq_and_inc(self) -> Seq:
 		with self.seq_lock:
-			return self.local_context.seq_inc()
+			return self.crypto_context().seq_inc()
 
 	def lower_transport_to_network_pdu(self, lower_pdu: transport.LowerPDU, src: UnicastAddress, dst: Address,
 									   seq: Seq, nid: NID, ttl: TTL) -> net.PDU:

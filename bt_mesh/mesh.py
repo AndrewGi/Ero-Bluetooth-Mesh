@@ -36,8 +36,6 @@ class CompanyID(U16):
 	byteorder = "little"
 
 
-SIGCompanyID = CompanyID()
-
 
 class ProductID(U16):
 	pass
@@ -146,6 +144,15 @@ class Address(U16):
 		return cls.from_int(int(s, base=16))
 
 	@classmethod
+	def from_dict_key(cls, d: DictValue, key: str) -> Union['GroupAddress', 'VirtualAddress', 'UnicastAddress']:
+		if isinstance(d[key], str):
+			return VirtualAddress(uuid=UUID(hex=d[key]))
+		elif isinstance(d[key], int):
+			return cls.from_int(d[key])
+		else:
+			raise TypeError(f"unrecognized dict type. key: {key} d: {d}")
+
+	@classmethod
 	def from_int(cls, i: int) -> Union['GroupAddress', 'UnicastAddress']:
 		try:
 			return UnicastAddress(i)
@@ -244,6 +251,59 @@ class PublishRetransmitParameters(TransmitParameters):
 
 class RelayRetransmitParameters(TransmitParameters):
 	STEP_LEN = 10
+
+
+class StepResolution(IntFlag):
+	HundredMilliseconds = 0
+	OneSecond = 1
+	TenSeconds = 2
+	TenMinutes = 3
+
+	def to_milliseconds(self) -> int:
+		if self == self.HundredMilliseconds:
+			return 100
+		elif self == self.OneSecond:
+			return 1 * 1000
+		elif self == self.TenSeconds:
+			return 10 * 1000
+		elif self == self.TenMinutes:
+			return 10 * 60 * 1000
+
+
+class PublishPeriod(ByteSerializable, Serializable):
+	__slots__ = "steps_num", "steps_res"
+
+	def __init__(self, steps_num: int, steps_res: StepResolution) -> None:
+		if 0 <= steps_num < 0x40:
+			self.steps_num = steps_num
+			self.steps_res = steps_res
+		raise ValueError(f"step num must be 0<={steps_res}<0x40")
+
+	def period(self) -> int:
+		return self.steps_res.to_milliseconds() * self.steps_num
+
+	def to_bytes(self) -> bytes:
+		return (((self.steps_res & 0x3) << 6) | (self.steps_num & 0x3F)).to_bytes(1, byteorder="little")
+
+	def to_dict(self) -> Dict[str, Any]:
+		return {
+			"steps_num": self.steps_num,
+			"steps_res": self.steps_res.value
+		}
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> Any:
+		steps_num = d["steps_num"]
+		steps_res = StepResolution(d["steps_res"])
+		return cls(steps_num, steps_res)
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'PublishPeriod':
+		if len(b) != 1:
+			raise ValueError(f"len of bytes should be 1 not {len(b)}")
+		steps_num = b[0] & 0x3F
+		steps_res = StepResolution(b[0] >> 6)
+		return cls(steps_num, steps_res)
 
 
 class Features(IntFlag):

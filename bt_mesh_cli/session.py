@@ -1,8 +1,8 @@
+import json
 from typing import List, Optional, Dict, Callable
 
-from ..bt_mesh import mesh, network, stack, crypto
-
-from .session import Session, CLIHandler, between_n_args
+from bt_mesh import mesh, network, stack, crypto, beacon
+from bt_mesh.bearers.pb_adv import AdvBearer
 
 
 def between_n_args(low: int, high: Optional[int] = None):
@@ -41,37 +41,27 @@ class Session:
 
 	def __init__(self, bearer: Optional[AdvBearer]):
 		self.bearer = bearer
-		if self.bearer:
-			self.bearer.recv_beacon = self.handle_beacon
-		self.provisioner = prov.Provisioner()
-		self.links = Links(self.bearer)
-		self.provisioner.unprovisioned_devices.on_new_device = self.on_new_device
-		self.provisioner.failed_callback = self.on_provision_failed
-		self.provisioner.get_provisioning_data = self.get_provisioning_data
-		self.provisioner.on_provision_done = self.on_provision_done
+
 		self.provision_all = False
 		self.running = True
 		self.mesh_network: network.Network = network.Network.new()
 		self.network_filename: Optional[str] = None
 		self.target: Optional[mesh.Address] = None
 
-		self.mesh_stack = stack.Stack(self.bearer, crypto.LocalContext.new_provisioner(), self.mesh_network)
+		self.mesh_stack = stack.Stack(self.bearer, stack.LocalContext.new(), self.mesh_network)
 		self.secure_network_beacons = beacon.SecureBeacons()
 
-		self.handlers: Dict[str, Callable[List[str]]] = dict()
-		self.handlers["provision"] = self.cli_provision
-		self.handlers["save_network"] = self.cli_save_network
-		self.handlers["load_network"] = self.cli_load_network
-		self.handlers["current_network"] = self.cli_current_network
-		self.handlers["user_data"] = self.cli_user_data
+		self.handlers: Dict[str, Callable[[List[str],], None]] = dict()
 		self.handlers["target"] = self.cli_target
+		self.handlers["dump"] = self.cli_dump
 		self.handlers["quit"] = self.cli_quit
 		self.handlers["help"] = self.cli_help
 
-		self.configure = ConfigCLI(self)
-		self.group_cli = GroupCLI(self)
-		self.handlers["config"] = self.configure.cli_handle
-		self.handlers["group"] = self.group_cli.cli_handle
+
+	def add_cli(self, cli_handler: 'CLIHandler') -> None:
+		if cli_handler.name in self.handlers:
+			raise NameError(f"{cli_handler.name} already exists in handlers: {self.handlers.keys()}")
+		self.handlers[cli_handler.name] = cli_handler.cli_handle
 
 	def list_help(self) -> None:
 		self.good(
@@ -152,13 +142,19 @@ quit										quit the program without saving
 		self.target = Target(new_address, net_key_index, app_key_index)
 		print_target()
 
+	@between_n_args(0)
+	def cli_dump(self, args: List[str]) -> None:
+		self.good(json.dumps(self.mesh_stack.to_dict(), indent=2, sort_keys=True))
+
 
 class CLIHandler:
 	def __init__(self, name: str, session: Session) -> None:
 		self.name = name
 		self.session = session
 		self.handlers: Dict[str, Callable[[List[str], ], None]] = dict()
-		self.session.handlers[self.name] = self.cli_handle
+
+	def target(self) -> Optional[Target]:
+		return self.session.target
 
 	def cli_handle(self, args: List[str]) -> None:
 		if not args:
@@ -169,12 +165,20 @@ class CLIHandler:
 			self.session.error(f"{self.name}: unrecognized command '{args}'")
 			return
 		else:
-			func(args[1:])
+			try:
+				func(args[1:])
+			except KeyError as ke:
+				self.error(f"key error: {ke}")
+			except ValueError as ve:
+				self.error(f"value error: {ve}")
 
 	def add_handler(self, name: str, handler: Callable[[List[str]], None]) -> None:
 		if name in self.handlers:
 			raise RuntimeError(f"{name} already being used")
 		self.handlers[name] = handler
+
+	def add_cli(self, cli_handler: 'CLIHandler') -> None:
+		self.add_handler(cli_handler.name, cli_handler.cli_handle)
 
 	def info(self, message: str) -> None:
 		self.session.info(f"{self.name}: {message}")

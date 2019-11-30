@@ -18,6 +18,18 @@ class SecureNetworkBeaconStateClient(SetStateClient):
 		self.state = Beacon.Status.from_bytes(msg.payload)
 
 
+class CompositionDataClient(GetStateClient):
+	def __init__(self, initial_state: Optional[CompositionData] = None) -> None:
+		super().__init__(ConfigOpcode.COMPOSITION_DATA_STATUS, ConfigOpcode.COMPOSITION_DATA_GET)
+		self.state = initial_state
+
+	def get(self, page_num: U8) -> None:
+		self.request_get(CompositionData.Get(page_num))
+
+	def on_status(self, msg: access.AccessMessage) -> None:
+		self.state = CompositionData.Status.from_bytes(msg.payload)
+
+
 class RelayStateClient(SetStateClient):
 	FullState = Tuple[RelayState, RelayRetransmitParameters]
 
@@ -30,7 +42,7 @@ class RelayStateClient(SetStateClient):
 
 	def set(self, new_state: FullState, ack: Optional[bool] = True) -> None:
 		assert ack
-		self.publish(ConfigOpcode.RELAY_SET, new_state)
+		self.publish(ConfigOpcode.RELAY_SET, Relay.Set(new_state))
 
 	def relay_state(self) -> RelayState:
 		return self.state[0]
@@ -147,6 +159,40 @@ class ModelPublicationStateClient(SetStateClient):
 		self.request_get(ModelPublication.Get(element_address, model_identifier))
 
 
+class DefaultTTLClient(SetStateClient):
+
+	def __init__(self) -> None:
+		super().__init__(ConfigOpcode.DEFAULT_TTL_GET, ConfigOpcode.DEFAULT_TTL_STATUS)
+		self.state: Optional[mesh.TTL] = None
+
+	def set(self, value: TTL, ack: Optional[bool] = True) -> None:
+		assert ack
+		self.publish(ConfigOpcode.DEFAULT_TTL_SET, DefaultTTL.Set(value))
+
+	def on_status(self, msg: access.AccessMessage) -> None:
+		new_status = DefaultTTL.Status.from_bytes(msg.payload)
+		self.state = new_status.ttl
+
+	def get(self) -> None:
+		self.request_get(DefaultTTL.Get())
+
+class GATTProxyClient(SetStateClient):
+
+	def __init__(self, inital_state: Optional[U8] = None) -> None:
+		super().__init__(ConfigOpcode.GATT_PROXY_GET, ConfigOpcode.GATT_PROXY_GET)
+		self.state = inital_state
+
+	def set(self, value: U8, ack: Optional[bool] = True) -> None:
+		assert ack
+		self.publish(ConfigOpcode.GATT_PROXY_SET, GATTProxy.Set(value))
+
+	def on_status(self, msg: access.AccessMessage) -> None:
+		new_status = GATTProxy.Status.from_bytes(msg.payload)
+		self.state = new_status
+
+	def get(self) -> None:
+		self.request_get(GATTProxy.Get())
+
 class ModelSubscriptionStateClient(State):
 
 	def __init__(self):
@@ -205,3 +251,8 @@ class ConfigClient(model.ModelClient):
 		self.model_publication = ModelPublicationStateClient()
 		self.add_state(self.model_publication)
 		self.model_subscription = ModelSubscriptionStateClient()
+		self.add_state(self.model_subscription)
+		self.composition = CompositionDataClient()
+		self.add_state(self.composition)
+		self.default_ttl = DefaultTTLClient()
+		self.add_state(self.default_ttl)

@@ -63,7 +63,7 @@ class ModelIdentifier:
 	STRUCT = struct.Struct("<HH")
 	__slots__ = ("company_id", "model_id")
 
-	def __init__(self, model_id: ModelID, company_id: Optional[CompanyID] = SIGCompanyID):
+	def __init__(self, model_id: ModelID, company_id: Optional[CompanyID] = None):
 		self.model_id = model_id
 		self.company_id = company_id
 
@@ -84,7 +84,7 @@ class AccessPayload:
 	__slots__ = ("opcode", "parameters", "big_mic")
 
 	def __init__(self, opcode: Opcode, parameters: bytes):
-		if len(parameters) > 380:
+		if len(parameters) > self.MAX_SIZE:
 			raise OverflowError("access payload too big")
 		self.opcode = opcode
 		self.parameters = parameters

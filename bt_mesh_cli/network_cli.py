@@ -1,9 +1,9 @@
 from typing import List, Optional
 import json
 
-from ..bt_mesh import mesh, network
+from bt_mesh import mesh, network
 
-from .session import Session, CLIHandler, between_n_args
+from session import Session, CLIHandler, between_n_args
 
 
 class NetworkCLI(CLIHandler):
@@ -38,7 +38,7 @@ class NetworkCLI(CLIHandler):
 	def load_network(self, filename: str) -> None:
 		self.info(f"loading network '{filename}")
 		try:
-			with open(filename, "r") as json_file:
+			with open(filename) as json_file:
 				mesh_network = network.Network.from_dict(json.load(json_file))
 				self.network().global_context = mesh_network.global_context
 				self.network().addresses = mesh_network.addresses
@@ -58,7 +58,7 @@ class NetworkCLI(CLIHandler):
 
 
 	def cli_user_data(self, args: List[str]) -> None:
-		if not self.target:
+		if not self.target():
 			self.error("no target")
 			return
 		try:

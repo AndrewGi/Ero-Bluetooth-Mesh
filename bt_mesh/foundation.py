@@ -7,7 +7,6 @@ from .serialize import *
 from typing import *
 import abc
 
-
 class CompositionDataPage(abc.ABC, ByteSerializable):
 
 	@classmethod
@@ -16,6 +15,11 @@ class CompositionDataPage(abc.ABC, ByteSerializable):
 
 	def to_bytes(self) -> bytes:
 		raise NotImplementedError()
+
+	@staticmethod
+	@abc.abstractmethod
+	def page_number() -> U8:
+		pass
 
 
 class CRPL(U16):
@@ -41,52 +45,6 @@ class LogField(U8):
 			return 0, 0
 		return 2 ** (self.value - 1), 2 ** self.value - 1
 
-
-class StepResolution(IntFlag):
-	HundredMilliseconds = 0
-	OneSecond = 1
-	TenSeconds = 2
-	TenMinutes = 3
-
-	def to_milliseconds(self) -> int:
-		if self == self.HundredMilliseconds:
-			return 100
-		elif self == self.OneSecond:
-			return 1 * 1000
-		elif self == self.TenSeconds:
-			return 10 * 1000
-		elif self == self.TenMinutes:
-			return 10 * 60 * 1000
-
-
-class PublishPeriod(ByteSerializable):
-	__slots__ = "steps_num", "steps_res"
-
-	def __init__(self, steps_num: int, steps_res: StepResolution) -> None:
-		if 0 <= steps_num < 0x40:
-			self.steps_num = steps_num
-			self.steps_res = steps_res
-		raise ValueError(f"step num must be 0<={steps_res}<0x40")
-
-	def period(self) -> int:
-		return self.steps_res.to_milliseconds() * self.steps_num
-
-	def to_bytes(self) -> bytes:
-		return (((self.steps_res & 0x3) << 6) | (self.steps_num & 0x3F)).to_bytes(1, byteorder="little")
-
-	def to_dict(self) -> Dict[str, Any]:
-		return {
-			"steps_num": self.steps_num,
-			"steps_res": self.steps_res.value
-		}
-
-	@classmethod
-	def from_bytes(cls, b: bytes) -> 'PublishPeriod':
-		if len(b) != 1:
-			raise ValueError(f"len of bytes should be 1 not {len(b)}")
-		steps_num = b[0] & 0x3F
-		steps_res = StepResolution(b[0] >> 6)
-		return cls(steps_num, steps_res)
 
 
 class ElementID(U8):
@@ -205,6 +163,10 @@ class CompositionDataPage0(CompositionDataPage):
 	def __eq__(self, other: 'CompositionDataPage0') -> bool:
 		return self.cid == other.cid and self.pid == other.pid and self.vid == other.vid and self.crpl == other.crpl \
 			   and self.features == other.features and self.elements == other.elements
+
+	@staticmethod
+	def page_number() -> U8:
+		return U8(0)
 
 
 class Fault(U8, Enum):

@@ -2,7 +2,7 @@ from abc import ABC
 
 from ..mesh import *
 from .. import access, foundation
-from ..access import ModelID
+from ..access import ModelID, ModelIdentifier
 from threading import Condition
 
 
@@ -35,16 +35,67 @@ class MessageHandler:
 		raise NotImplementedError()
 
 
-class Model:
+class ModelPublicationContext(Serializable):
+	__slots__ = "publish_address", "app_key_index", "credential", "ttl", "period", "retransmit"
+
+	def __init__(self, publish_address: Address, app_key_index: AppKeyIndex, credential: bool,
+				 ttl: TTL, period: PublishPeriod, retransmit: PublishRetransmitParameters) -> None:
+		self.publish_address = publish_address
+		self.app_key_index = app_key_index
+		self.credential = credential
+		self.ttl = ttl
+		self.period = period
+		self.retransmit = retransmit
+
+	def to_dict(self) -> DictValue:
+		return {
+			"publish_address": self.publish_address.value,
+			"app_key_index": self.app_key_index.value,
+			"credential": self.credential,
+			"ttl": self.ttl.value,
+			"period": self.period.to_dict(),
+			"retransmit": self.retransmit.to_dict(),
+		}
+
+	def to_model_publication(self, element_address: UnicastAddress,
+							 model_identifier: ModelIdentifier) -> foundation.ModelPublication:
+		return foundation.ModelPublication(element_address, self.publish_address, self.app_key_index,
+										   self.credential, self.ttl, self.period, self.retransmit, model_identifier)
+
+	@classmethod
+	def from_model_publication(cls, p: foundation.ModelPublication) -> 'ModelPublicationContext':
+		return cls(p.publish_address, p.app_key_index, p.credential_flag, p.publish_ttl,
+				   p.publish_period, p.publish_retransmit)
+
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> Any:
+		publish_address = Address.from_dict_key(d, "publish_address")
+		app_key_index = AppKeyIndex(d["app_key_index"])
+		credential = d["credential"]
+		ttl = TTL(d["ttl"])
+		period = PublishPeriod.from_dict(d["period"])
+		retransmit = PublishRetransmitParameters.from_dict(d["retransmit"])
+		return cls(publish_address, app_key_index, credential, ttl, period, retransmit)
+
+
+class Model(ToDict):
 	__slots__ = "company_id", "model_id", "handlers", "states", "publication", "send_access"
 
-	def __init__(self, model_id: ModelID, company_id: Optional[CompanyID] = SIGCompanyID) -> None:
+	def __init__(self, model_id: ModelID, company_id: Optional[CompanyID] = None) -> None:
 		self.model_id = model_id
 		self.company_id = company_id
 		self.handlers: Dict[access.Opcode, HandlerCallable] = dict()
 		self.states: List['State'] = list()
-		self.publication: Optional[foundation.ModelPublication] = None
+		self.publication: Optional[ModelPublicationContext] = None
 		self.send_access: Optional[Callable[[access.AccessMessage], None]] = None
+
+	def to_dict(self) -> DictValue:
+		return {
+			"company_id": self.company_id.value if self.company_id else None,
+			"model_id": self.model_id,
+			"publication": self.publication.to_dict()
+		}
 
 	def add_handler(self, opcode: access.Opcode, callback: HandlerCallable) -> None:
 		if opcode in self.handlers.values():
@@ -56,10 +107,16 @@ class Model:
 			self.add_handler(opcode, handler)
 		self.states.append(state)
 
-	def publish(self, opcode: access.Opcode, msg: ModelMessage) -> None:
-		access.AccessMessage(self.publication.element_address, self.publication.publish_address,
-							 self.publication.publish_ttl,
-							 opcode, msg.to_bytes(), self.publication.app_key_index, self.publication.net_key_index)
+	def publish_msg(self, opcode: access.Opcode, msg: ModelMessage) -> None:
+		if self.publication is None:
+			raise ValueError("missing model publication")
+		if self.send_access is None:
+			raise ValueError("missing send_access")
+		msg = access.AccessMessage(self.publication.element_address, self.publication.publish_address,
+								   self.publication.publish_ttl,
+								   opcode, msg.to_bytes(), self.publication.app_key_index,
+								   self.publication.net_key_index)
+		self.send_access(msg)
 
 
 class ModelServer(Model):
@@ -111,7 +168,7 @@ class State:
 	def publish(self, opcode: access.Opcode, msg: ModelMessage) -> None:
 		if not self.parent:
 			raise RuntimeError("model must be bound to parent")
-		self.parent.publish(opcode, msg)
+		self.parent.publish_msg(opcode, msg)
 
 
 class StatusMessage(ModelMessage, ABC):

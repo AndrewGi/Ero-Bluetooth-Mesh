@@ -1,10 +1,10 @@
 from uuid import UUID
-from typing import List
+from typing import List, cast
 
-from ..bt_mesh import mesh, prov
-from ..bt_mesh.bearers import pb_adv
+from bt_mesh import mesh, prov, beacon
+from bt_mesh.bearers import pb_adv
 
-from .session import Session, CLIHandler, between_n_args
+from session import Session, CLIHandler, between_n_args
 
 
 class ProvisionerCLI(CLIHandler):
@@ -14,6 +14,12 @@ class ProvisionerCLI(CLIHandler):
 		device.set_bearer(self.links.new_link(uuid))
 		device.user_data["network_index"] = network_index
 		self.provisioner.provision(uuid)
+		self.provisioner.unprovisioned_devices.on_new_device = self.on_new_device
+		self.provisioner.failed_callback = self.on_provision_failed
+		self.provisioner.get_provisioning_data = self.get_provisioning_data
+		self.provisioner.on_provision_done = self.on_provision_done
+		if self.session.bearer:
+			self.session.bearer.recv_beacon = self.handle_beacon
 
 	@between_n_args(1, 3)
 	def cli_provision(self, args: List[str]) -> None:
@@ -30,14 +36,14 @@ class ProvisionerCLI(CLIHandler):
 		self.info(f"new device! {new_device.device_uuid}")
 
 	def get_provisioning_data(self, device: prov.UnprovisionedDevice) -> prov.ProvisioningData:
-		remote_device = self.mesh_network.addresses.allocate_device(device.capabilities.number_of_elements)
+		remote_device = self.network().addresses.allocate_device(device.capabilities.number_of_elements)
 		address = remote_device.primary_address
 		net_id = device.user_data["network_index"]
-		net_sm = self.mesh_network.global_context.get_net(net_id)
+		net_sm = self.network().global_context.get_net(net_id)
 		network_key = net_sm.old.key
-		ivi_index = self.mesh_network.global_context.iv_index
+		ivi_index = self.network().global_context.iv_index
 		flags = mesh.NetworkStateFlags(0)
-		if self.mesh_network.global_context.iv_updating:
+		if self.network().global_context.iv_updating:
 			flags |= mesh.NetworkStateFlags.IVUpdate
 		if net_sm.phase == prov.crypto.KeyRefreshPhase.Phase2:
 			network_key = net_sm.new

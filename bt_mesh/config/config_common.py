@@ -174,7 +174,7 @@ class CompositionData:
 	class Status(StatusMessage):
 		__slots__ = "page_number", "data"
 
-		def __init__(self, page_number: U8, data: bytes) -> None:
+		def __init__(self, page_number: U8, data: foundation.CompositionDataPage) -> None:
 			self.page_number = page_number
 			self.data = data
 
@@ -183,7 +183,10 @@ class CompositionData:
 
 		@classmethod
 		def from_bytes(cls, b: bytes) -> 'CompositionData.Status':
-			return cls(U8(b[0]), b[1:])
+			page_num = U8(b[0])
+			if page_num != 0:
+				raise ValueError(f"unknown page number: {page_num}")
+			return cls(page_num, foundation.CompositionDataPage0.from_bytes(b[1:]))
 
 
 class DefaultTTL:

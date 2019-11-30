@@ -43,9 +43,25 @@ class ReplayEntry(Serializable):
 class ReplayCache(Serializable):
 	__slots__ = "iv_index", "seq_set"
 
-	def __init__(self, iv_index: IVIndex):
+	def __init__(self, iv_index: IVIndex, seq_set: Dict[UnicastAddress, ReplayEntry]):
 		self.iv_index = iv_index
-		self.seq_set: Dict[UnicastAddress, ReplayEntry] = dict()
+		self.seq_set: Dict[UnicastAddress, ReplayEntry] = seq_set
+
+	def to_dict(self) -> DictValue:
+		return {
+			"iv_index": self.iv_index.value,
+			"seq_set": {
+				address.value: entry.to_dict() for address, entry in self.seq_set.items()
+			}
+		}
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> Any:
+		iv_index = IVIndex(d["iv_index"])
+		seq_set: Dict[UnicastAddress, ReplayEntry] = {
+			UnicastAddress(address): ReplayEntry.from_dict(entry) for address, entry in d.items()
+		}
+		return cls(iv_index, seq_set)
 
 	def update_iv(self, new_iv: IVIndex):
 		if self.iv_index.next_iv() != new_iv:
