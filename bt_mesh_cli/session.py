@@ -42,13 +42,10 @@ class Session:
 	def __init__(self, bearer: Optional[AdvBearer]):
 		self.bearer = bearer
 
-		self.provision_all = False
 		self.running = True
-		self.mesh_network: network.Network = network.Network.new()
-		self.network_filename: Optional[str] = None
 		self.target: Optional[mesh.Address] = None
 
-		self.mesh_stack = stack.Stack(self.bearer, stack.LocalContext.new(), self.mesh_network)
+		self.mesh_stack = stack.Stack(self.bearer, stack.LocalContext.new(), network.Network.new())
 		self.secure_network_beacons = beacon.SecureBeacons()
 
 		self.handlers: Dict[str, Callable[[List[str],], None]] = dict()
@@ -83,7 +80,9 @@ quit										quit the program without saving
 	@between_n_args(0)
 	def cli_quit(self, args: List[str]) -> None:
 		self.good("quitting...")
+		self.mesh_stack.stop()
 		self.running = False
+
 
 
 
@@ -142,9 +141,24 @@ quit										quit the program without saving
 		self.target = Target(new_address, net_key_index, app_key_index)
 		print_target()
 
-	@between_n_args(0)
+	@staticmethod
+	def pretty_dump(o: mesh.ToDict) -> str:
+		return json.dumps(o.to_dict(), indent=2, sort_keys=True)
+
+	@between_n_args(1)
 	def cli_dump(self, args: List[str]) -> None:
-		self.good(json.dumps(self.mesh_stack.to_dict(), indent=2, sort_keys=True))
+		options = {
+			"stack": self.mesh_stack,
+			"network": self.mesh_stack.mesh_network,
+			"crypto": self.mesh_stack.mesh_network.crypto_context,
+			"local": self.mesh_stack.local_context
+
+		}
+		result = options.get(args[0])
+		if result is None:
+			self.error(f"option {args[0]} not found")
+			return
+		self.good(self.pretty_dump(result))
 
 
 class CLIHandler:
@@ -196,4 +210,4 @@ class CLIHandler:
 		return self.session.mesh_stack
 
 	def network(self) -> network.Network:
-		return self.session.mesh_network
+		return self.session.mesh_stack.mesh_network

@@ -434,7 +434,7 @@ class SegmentAssembler:
 		return SegmentAcknowledgementPDU(self.obo, self.seq_zero, BlockAck(0, self.seg_n))
 
 
-class ReassemblerContext:
+class ReassemblerContext(ToDict):
 	def __init__(self, parent: 'Reassemblers', segment_assembler: SegmentAssembler, ttl: TTL) -> None:
 		self.parent = parent
 		self.segment_assembler = segment_assembler
@@ -442,6 +442,11 @@ class ReassemblerContext:
 		self.start_time = time.time()
 		self.ttl = ttl
 		self.send_seg_ack: Optional[Callable[[SegmentAcknowledgementPDU, TTL], None]] = None
+
+	def to_dict(self) -> DictValue:
+		return {
+			
+		}
 
 	def is_incomplete(self) -> bool:
 		"""
@@ -485,13 +490,19 @@ class ReassemblerTask(scheduler.Task):
 		self.parent.trigger_send_ack()
 
 
-class Reassemblers:
+class Reassemblers(ToDict):
 	__slots__ = "contexts", "scheduler", "ttl"
 
 	def __init__(self, ttl: TTL):
 		self.contexts: Dict[SegmentSrc, ReassemblerContext] = dict()
 		self.scheduler = scheduler.Scheduler()
 		self.ttl = ttl
+
+	def to_dict(self) -> DictValue:
+		return {
+			"contexts": serialize_dict(self.contexts),
+
+		}
 
 	def handle_control(self, control_pdu: UnsegmentedControlLowerPDU):
 		pass

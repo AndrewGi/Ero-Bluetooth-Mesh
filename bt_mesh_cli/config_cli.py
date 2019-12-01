@@ -234,7 +234,7 @@ class NetKeyCLI(CLIHandler):
 		index = mesh.NetKeyIndex(int(args[0]))
 		key: Optional[crypto.NetworkKey] = None
 		try:
-			key = self.network().global_context.get_net(index).tx_sm().key
+			key = self.network().crypto_context.get_net(index).tx_sm().key
 		except KeyError as e:
 			self.session.error(f"netkey index '{index}' does not exist")
 		finally:

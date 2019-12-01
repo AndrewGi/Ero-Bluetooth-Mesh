@@ -1,3 +1,5 @@
+import random
+
 from .mesh import *
 from . import crypto, prov
 
@@ -49,8 +51,20 @@ class AddressSpace(Serializable):
 	def _allocate_device(self, remote_device: RemoteDevice) -> None:
 		self.unicasts[remote_device.primary_address] = remote_device
 
+	def add_random_group(self, name: str) -> GroupAddress:
+		def random_group() -> GroupAddress:
+			return GroupAddress(random.randint(0xC000, 0xCFFF))
+
+		address = random_group()
+		group_addresses = self.groups.values()
+		while address in group_addresses:
+			address = random_group()
+		self.add_group(address, name)
+		return address
+
+
 	def add_group(self, group_address: GroupAddress, name: str) -> None:
-		if name in self.groups.values():
+		if name in self.groups.keys():
 			raise ValueError(f"group name already exists '{name}'")
 		if group_address in self.groups.keys():
 			raise ValueError(f"group address already exists '{group_address}'")
@@ -90,6 +104,10 @@ class AddressSpace(Serializable):
 		return device
 
 	def verify_space(self) -> None:
+		"""
+			Checks to make sure no unicast addresses range overlap.
+		:return:
+		"""
 		if not self.unicasts:
 			return
 		addresses = self.addresses()
@@ -104,20 +122,25 @@ class AddressSpace(Serializable):
 	def _insert_device(self, remote_device: RemoteDevice) -> None:
 		if remote_device.primary_address in self.unicasts.keys():
 			raise ValueError(f"{remote_device} already in remote devices")
-		self.unicasts[remote_device.primary_address] = remote_device
+		self._allocate_device(remote_device)
 
 	@classmethod
 	def from_dict(cls, d: Dict[str, Any]) -> 'AddressSpace':
-		remote_devices = [RemoteDevice.from_dict(raw_device) for raw_device in d["unicasts"]]
+		remote_devices = [RemoteDevice.from_dict(raw_device) for raw_device in d["unicast"]]
 		space = cls()
+
+		# We iterate through and add the addresses one by one to verify there are no conflicts.
 		for device in remote_devices:
 			space._insert_device(device)
+		for name, address in d["group"].items():
+			space.add_group(GroupAddress(address), name)
 		space.verify_space()
 		return space
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
-			"unicasts": [device.to_dict() for device in self.unicasts.values()]
+			"unicast": [device.to_dict() for device in self.unicasts.values()],
+			"group": {name: address.value for name, address in self.groups.items()},
 		}
 
 	def get_primary_device(self, primary_address: UnicastAddress) -> RemoteDevice:
@@ -125,12 +148,12 @@ class AddressSpace(Serializable):
 
 
 class Network(Serializable):
-	__slots__ = "global_context", "addresses"
+	__slots__ = "crypto_context", "addresses"
 
 	# TODO: Something better than end_address
-	def __init__(self, global_context: crypto.GlobalContext, address_space: AddressSpace):
+	def __init__(self, crypto_context: crypto.GlobalContext, address_space: AddressSpace):
 		self.addresses: AddressSpace = address_space
-		self.global_context: crypto.GlobalContext = global_context
+		self.crypto_context: crypto.GlobalContext = crypto_context
 
 	@classmethod
 	def new(cls) -> 'Network':
@@ -138,7 +161,7 @@ class Network(Serializable):
 
 	def to_dict(self) -> Dict[str, Any]:
 		return {
-			"global_context": self.global_context.to_dict(),
+			"global_context": self.crypto_context.to_dict(),
 			"address_space": self.addresses.to_dict()
 		}
 
@@ -156,4 +179,3 @@ class Network(Serializable):
 			return None
 		else:
 			return crypto.DeviceSecurityMaterial(device.device_key)
-

@@ -39,11 +39,11 @@ class ProvisionerCLI(CLIHandler):
 		remote_device = self.network().addresses.allocate_device(device.capabilities.number_of_elements)
 		address = remote_device.primary_address
 		net_id = device.user_data["network_index"]
-		net_sm = self.network().global_context.get_net(net_id)
+		net_sm = self.network().crypto_context.get_net(net_id)
 		network_key = net_sm.old.key
-		ivi_index = self.network().global_context.iv_index
+		ivi_index = self.network().crypto_context.iv_index
 		flags = mesh.NetworkStateFlags(0)
-		if self.network().global_context.iv_updating:
+		if self.network().crypto_context.iv_updating:
 			flags |= mesh.NetworkStateFlags.IVUpdate
 		if net_sm.phase == prov.crypto.KeyRefreshPhase.Phase2:
 			network_key = net_sm.new

@@ -165,8 +165,12 @@ class Stack(ToDict):
 
 		self.reassemblers = transport.Reassemblers(self.DEFAULT_TTL)
 		self.segmented_messages = transport.SegmentedMessages()
+		self.running = True
 
 		self.elements = Elements(list())
+
+	def stop(self) -> None:
+		self.running = False
 
 	def crypto_context(self) -> crypto.LocalContext:
 		return self.local_context.crypto_context
@@ -176,7 +180,7 @@ class Stack(ToDict):
 		self.replay_cache = replay.ReplayCache(self.iv_index(), dict())
 
 	def iv_index(self) -> IVIndex:
-		return self.mesh_network.global_context.iv_index
+		return self.mesh_network.crypto_context.iv_index
 
 	def set_bearer(self, stack_bearer: bearer.Bearer) -> None:
 		"""
@@ -247,7 +251,7 @@ class Stack(ToDict):
 			return
 
 		app_nonce = context.application_nonce()
-		for index, sm in self.mesh_network.global_context.get_aid_rx_keys(pdu.aid):
+		for index, sm in self.mesh_network.crypto_context.get_aid_rx_keys(pdu.aid):
 			try:
 				access_payload = pdu.decrypt(app_nonce, sm)
 				context.app_index = index
@@ -287,8 +291,8 @@ class Stack(ToDict):
 
 	def _handle_network_pdu_bytes(self, pdu: bytes) -> None:
 		ivi, nid = net.PDU.ivi_nid(pdu)
-		iv_index = self.mesh_network.global_context.get_iv_index(ivi)
-		for net_index, sm in self.mesh_network.global_context.get_nid_rx_keys(nid):
+		iv_index = self.mesh_network.crypto_context.get_iv_index(ivi)
+		for net_index, sm in self.mesh_network.crypto_context.get_nid_rx_keys(nid):
 			try:
 				net_pdu = net.PDU.from_bytes(pdu, sm, iv_index)
 				context = MessageContext.from_net(net_pdu)
@@ -316,15 +320,15 @@ class Stack(ToDict):
 	def app_nonce(self, msg: access.AccessMessage) -> crypto.ApplicationNonce:
 		assert not msg.device_key() and msg.appkey_index is not None
 		return crypto.ApplicationNonce(msg.big_mic, self.crypto_context().seq, msg.src, msg.dst,
-									   self.mesh_network.global_context.iv_index)
+									   self.mesh_network.crypto_context.iv_index)
 
 	def device_nonce(self, msg: access.AccessMessage) -> crypto.DeviceNonce:
 		assert msg.device_key() and msg.appkey_index is None
 		return crypto.DeviceNonce(msg.big_mic, self.crypto_context().seq, msg.src, msg.dst,
-								  self.mesh_network.global_context.iv_index)
+								  self.mesh_network.crypto_context.iv_index)
 
 	def encrypt_access(self, msg: access.AccessMessage) -> transport.UpperEncryptedAccessPDU:
-		sm = self.crypto_context().device_sm if msg.device_key() else self.mesh_network.global_context.get_app(
+		sm = self.crypto_context().device_sm if msg.device_key() else self.mesh_network.crypto_context.get_app(
 			msg.appkey_index)
 		nonce = self.device_nonce(msg) if msg.device_key() else self.app_nonce(msg)
 		payload = msg.payload().to_bytes()
@@ -365,11 +369,8 @@ class Stack(ToDict):
 	def queue_access_message(self, msg: access.AccessMessage) -> None:
 		self.outgoing_access_message_queue.put(msg)
 
-	def running(self) -> bool:
-		return True
-
 	def send_access_message_worker(self) -> None:
-		while self.running():
+		while self.running:
 			next_item: Tuple[
 				access.AccessMessage, foundation.ModelPublication] = self.outgoing_access_message_queue.get()
 			if next_item is None:
@@ -379,7 +380,7 @@ class Stack(ToDict):
 
 	def send_access_message(self, msg: access.AccessMessage, publication: foundation.ModelPublication):
 		net_sm = cast(crypto.NetworkSecurityMaterial,
-					  self.mesh_network.global_context.get_net(msg.netkey_index).tx_sm())
+					  self.mesh_network.crypto_context.get_net(msg.netkey_index).tx_sm())
 		encrypted_access = self.encrypt_access(msg)
 		ttl = publication.publish_ttl if msg.ttl == TTL.DEFAULT_TTL else msg.ttl
 		if encrypted_access.should_segment() or msg.force_segment:

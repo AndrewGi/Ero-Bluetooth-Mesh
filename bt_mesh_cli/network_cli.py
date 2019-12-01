@@ -10,6 +10,7 @@ class NetworkCLI(CLIHandler):
 	def __init__(self, session: Session) -> None:
 		super().__init__("network", session)
 		self.network_filename: Optional[str] = None
+		self.add_cli(GroupCLI(session))
 
 	def cli_load_network(self, args: List[str]) -> None:
 		if len(args) > 1:
@@ -40,7 +41,7 @@ class NetworkCLI(CLIHandler):
 		try:
 			with open(filename) as json_file:
 				mesh_network = network.Network.from_dict(json.load(json_file))
-				self.network().global_context = mesh_network.global_context
+				self.network().crypto_context = mesh_network.crypto_context
 				self.network().addresses = mesh_network.addresses
 		except FileNotFoundError as e:
 			self.error(f"'{filename}' not found!")
@@ -62,7 +63,7 @@ class NetworkCLI(CLIHandler):
 			self.error("no target")
 			return
 		try:
-			device: network.RemoteDevice = self.session.mesh_network.addresses.unicasts[self.session.target]
+			device: network.RemoteDevice = self.network().addresses.unicasts[self.session.target]
 		except KeyError:
 			self.session.error(f"target {self.session.target} does not exist in local network")
 			return
@@ -106,6 +107,27 @@ class NetworkCLI(CLIHandler):
 			pass
 		self.good(f"{self.target}:{key}:{value}")
 
+class NetKeyCLI(CLIHandler):
+	def __init__(self, session: Session) -> None:
+		super().__init__("netkey", session)
+
+	def list(self) -> None:
+		for net in self.network().crypto_context.nets.values():
+			self.good(f"index {net.index} phase: {net.phase}")
+
+	@between_n_args(0)
+	def cli_list(self, args: List[str]) -> None:
+		self.list()
+
+	def get(self, index: mesh.NetKeyIndex) -> None:
+		cc = self.network().crypto_context
+		if index not in cc.nets:
+			self.error(f"index {index} not found in netkey list")
+			return
+		net = cc.get_net(index)
+		self.good()
+
+
 class GroupCLI(CLIHandler):
 	def __init__(self, session: Session) -> None:
 		super().__init__("group", session)
@@ -118,7 +140,7 @@ class GroupCLI(CLIHandler):
 	def cli_group_help(self, args: List[str]) -> None:
 		self.session.good(
 			"""
-add [group_address]	[group_name]	add a group
+add [group_name] (group_address)	add a group (leave address blank for random)
 list								list all groups
 get	[group_name]					get group
 help								list group help
@@ -126,7 +148,7 @@ help								list group help
 
 	def get_group(self, name: str) -> None:
 		try:
-			address = self.session.mesh_network.addresses.get_group(name)
+			address = self.network().addresses.get_group(name)
 		except KeyError:
 			self.session.warning(f"'{name}' group not found")
 			return
@@ -137,21 +159,26 @@ help								list group help
 	def cli_group_get(self, args: List[str]) -> None:
 		self.get_group(args[0])
 
-	def add_group(self, address: mesh.GroupAddress, name: str) -> None:
-		self.session.mesh_network.addresses.add_group(address, name)
+	def add_group(self, name: str, address: Optional[mesh.GroupAddress] = None) -> None:
+		if address is None:
+			address = self.network().addresses.add_random_group(name)
+		else:
+			self.network().addresses.add_group(address, name)
 		self.session.good(f"added group '{name}' : '{address}'")
 
-	@between_n_args(2, 3)
+	@between_n_args(1, 3)
 	def cli_group_add(self, args: List[str]) -> None:
-		address = mesh.Address.from_str(args[0])
-		if not isinstance(address, mesh.GroupAddress):
-			self.session.error(f"expect group address not {address.__class__}")
-			return
-		name = args[1]
-		self.add_group(address, name)
+		address: Optional[mesh.Address] = None
+		if len(args) == 2:
+			address = mesh.Address.from_str(args[1])
+			if not isinstance(address, mesh.GroupAddress):
+				self.session.error(f"expect group address not {address.__class__}")
+				return
+		name = args[0]
+		self.add_group(name, address)
 
 	def list_groups(self) -> None:
-		self.session.good(str(self.session.mesh_network.addresses.groups))
+		self.session.good(str(self.network().addresses.groups))
 
 	@between_n_args(0, 1)
 	def cli_list_group(self, args: List[str]) -> None:

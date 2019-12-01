@@ -246,7 +246,6 @@ class ECCKeyPoint:
 		self.x = x
 		self.y = y
 
-
 ECC_NUM_LEN = 32
 ec_curve = ec.SECP256R1()
 
@@ -259,12 +258,23 @@ class ECCPublicKey(ByteSerializable):
 			raise ValueError(f"public key not NIST-256 key ({public_key.curve.name})")
 		self.public_key = public_key
 
-	@property
 	def point(self) -> ECCKeyPoint:
 		if self.public_key.curve.name != ec_curve.name:
 			raise ValueError("public key not NIST-256 key")
 		nums: ec.EllipticCurvePublicNumbers = self.public_key.public_numbers()
 		return ECCKeyPoint(x=nums.x, y=nums.y)
+
+	@classmethod
+	def from_bytes(cls, b: bytes) -> 'ECCPublicKey':
+		if len(b) != ECC_NUM_LEN*2:
+			raise ValueError(f"expected {ECC_NUM_LEN*2} bytes not {len(b)}")
+		x = int.from_bytes(b[:ECC_NUM_LEN], "big")
+		y = int.from_bytes(b[ECC_NUM_LEN:], "big")
+		return cls.from_point(ECCKeyPoint(x, y))
+
+	def to_bytes(self) -> bytes:
+		p = self.point()
+		return p.x.to_bytes(ECC_NUM_LEN, "big") + p.y.to_bytes(ECC_NUM_LEN, "big")
 
 	@classmethod
 	def from_point(cls, point: ECCKeyPoint) -> 'ECCPublicKey':
@@ -336,11 +346,18 @@ def aes_ccm_decrypt(key: Key, nonce: Nonce, data: bytes, mic: MIC, associated_da
 		raise InvalidMIC()
 
 
-class SecurityMaterial(ABC):
+class SecurityMaterial(Serializable, ABC):
 	__slots__ = "key"
 
 	def __init__(self, key: Key):
 		self.key = key
+
+	def to_dict(self) -> DictValue:
+		return {"key": self.key.hex()}
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> 'SecurityMaterial':
+		return cls(Key.from_bytes_hex(d["key"]))
 
 
 class TransportSecurityMaterial(SecurityMaterial, ABC):
@@ -371,6 +388,16 @@ class AppSecurityMaterial(TransportSecurityMaterial):
 	@classmethod
 	def from_key(cls, key: AppKey):
 		return cls(key, AID(k4(key.key_bytes)))
+
+	def to_dict(self) -> DictValue:
+		return {
+			"aid": self.aid.value,
+			"key": self.key.hex()
+		}
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> 'AppSecurityMaterial':
+		return cls(AppKey.from_bytes_hex(d["key"]), AID(d["aid"]))
 
 
 class DeviceSecurityMaterial(TransportSecurityMaterial):
@@ -406,6 +433,28 @@ class NetworkSecurityMaterial(SecurityMaterial):
 	@classmethod
 	def from_key(cls, network_key: NetworkKey) -> 'NetworkSecurityMaterial':
 		return network_key.security_material()
+
+	def to_dict(self) -> DictValue:
+		return {
+			"nid": self.nid.value,
+			"network_id": self.network_id.value,
+			"network_key": self.key.hex(),
+			"privacy_key": self.privacy_key.hex(),
+			"encryption_key": self.encryption_key.hex(),
+			"identity_key": self.identity_key.hex(),
+			"beacon_key": self.beacon_key.hex()
+		}
+
+	@classmethod
+	def from_dict(cls, d: DictValue) -> 'NetworkSecurityMaterial':
+		nid = NID(d["nid"])
+		net_id = NetworkID(d["network_id"])
+		net_key = NetworkKey.from_bytes_hex(d["network_key"])
+		priv_key = PrivacyKey.from_bytes_hex(d["privacy_key"])
+		encrypt_key = EncryptionKey.from_bytes_hex(d["encryption_key"])
+		identity_key = IdentityKey.from_bytes_hex(d["identity_key"])
+		beacon_key = BeaconKey.from_bytes_hex(d["beacon_key"])
+		return cls(net_id, nid, net_key, encrypt_key, priv_key, identity_key, beacon_key)
 
 
 def aes_ecb_encrypt(key: Key, clear_text: bytes) -> bytes:
@@ -531,10 +580,10 @@ class AppKeyIndexSlot(KeyIndexSlot):
 
 	@classmethod
 	def from_dict(cls, d: Dict[str, Any]) -> 'AppKeyIndexSlot':
-		new = None if d["new"] is None else AppSecurityMaterial.from_key(AppKey.from_str(d["new"]))
+		new = None if d["new_key"] is None else AppSecurityMaterial.from_key(AppKey.from_str(d["new_key"]))
 
 		return cls(index=AppKeyIndex(d["index"]), phase=KeyRefreshPhase(d["phase"]),
-				   new=new, old=AppSecurityMaterial.from_key(AppKey.from_str(d["old"])))
+				   new=new, old=AppSecurityMaterial.from_key(AppKey.from_str(d["old_key"])))
 
 
 class NetKeyIndexSlot(KeyIndexSlot):
@@ -681,7 +730,7 @@ class LocalContext(Serializable):
 
 	@classmethod
 	def new(cls) -> 'LocalContext':
-		return cls(Seq(),  None)
+		return cls(Seq(), None)
 
 	def seq_inc(self) -> Seq:
 		return self.seq_allocate(1)
