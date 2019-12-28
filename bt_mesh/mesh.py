@@ -194,7 +194,7 @@ class VirtualAddress(Address):
 	def addr(self) -> Address:
 		if not self.VIRTUAL_AES_CMAC:
 			raise ValueError("missing virtual aes cmac (did you import crypto?)")
-		return Address(int.from_bytes(self.VIRTUAL_AES_CMAC(self.uuid)[14:15], byteorder="big") | 0x8000)
+		return Address(int.from_bytes(self.VIRTUAL_AES_CMAC(self.uuid)[14:15], byteorder="big") & 0x3FFF | 0x8000)
 
 	def __init__(self, uuid: UUID):
 		self.uuid = uuid
